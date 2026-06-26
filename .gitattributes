@@ -1,0 +1,15 @@
+# Normalize line endings so the repo stays consistent across machines (work +
+# personal Windows, and Linux/AWS). Text is stored and checked out as LF everywhere,
+# which stops the "LF will be replaced by CRLF" churn and spurious whole-file diffs.
+* text=auto eol=lf
+
+# Binary artifacts — never normalize or diff as text.
+*.parquet binary
+*.bundle binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.xlsx binary
+*.pptx binary
+*.docx binary
