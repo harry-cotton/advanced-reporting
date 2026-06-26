@@ -1,0 +1,31 @@
+# Secrets — never commit
+.env
+*.env
+config/config.yaml
+secrets/
+*.key
+
+# Data & generated outputs
+data/raw/*
+data/interim/*
+data/processed/*
+outputs/*
+!**/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

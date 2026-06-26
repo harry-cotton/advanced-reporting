@@ -1,0 +1,40 @@
+# Copy to config/config.yaml (gitignored) and adjust to your data.
+project:
+  name: Advanced Reporting
+  currency: USD
+
+data:
+  source: synthetic          # active ad source: synthetic | csv | supermetrics |
+                             #   google_ads | meta | tiktok | linkedin (see ingestion/factory.py)
+  geos:                      # synthetic-only: a handful of geos to emit
+    - US-NE
+    - US-MW
+    - US-W
+  start: "2024-07-01"        # fixed extraction window (ISO) for deterministic, reproducible
+  end: "2026-06-28"          #   pulls; override per-run with `ingest.py --start/--end`
+  raw_dir: data/raw
+  processed_dir: data/processed
+  sample_file: data/raw/sample_campaigns.csv
+
+modeling:
+  engine: baseline            # "baseline" (always available) or "meridian"
+  target: revenue             # KPI to decompose
+  date_col: date
+  channel_spend_cols:         # media channels (spend) to model
+    - google_search
+    - google_pmax
+    - meta
+    - tiktok
+    - linkedin
+  control_cols:               # non-media drivers
+    - price_index
+    - promo_flag
+  adstock_max_lag: 8
+  train_frac: 0.85
+
+quality:
+  spike_factor: 3.0           # flag a week if channel x geo spend > N x the prior week
+  fill_freq: W-MON            # calendar grain for gap-filling missing weeks
+
+reporting:
+  output_dir: outputs

@@ -1,0 +1,96 @@
+# Canonical ingestion mappings (Phase 2). Structural config -- safe to commit
+# (NOT gitignored; contains no secrets or data).
+#
+#   channel_aliases : raw channel label -> canonical channel key.
+#                     Mirrors transform/clean.py exactly; standardize_channel() reads this.
+#   sources         : per-source raw export column -> canonical schema column.
+#                     "default" is the identity map used by the synthetic CSV, so behavior
+#                     on synthetic data stays identical. The platform maps below are
+#                     forward-looking scaffolding showing how real exports/APIs line up
+#                     onto the canonical schema (see ingestion/schema.py).
+#
+# A real connector typically sets `channel` from the account/query it pulls and
+# `geo`/`currency` from request params; schema.normalize() fills geo/currency defaults
+# when a source omits them.
+
+channel_aliases:
+  facebook: meta
+  fb: meta
+  instagram: meta
+  ig: meta
+  google: google_search
+  search: google_search
+  google_search: google_search
+  pmax: google_pmax
+  performance_max: google_pmax
+  google_pmax: google_pmax
+  tik_tok: tiktok
+  tik-tok: tiktok
+  tiktok: tiktok
+  linked_in: linkedin
+  linkedin: linkedin
+  meta: meta
+
+sources:
+  # Synthetic CSV already uses canonical column names -> identity map (no behavior change).
+  default:
+    date: date
+    channel: channel
+    campaign: campaign
+    spend: spend
+    impressions: impressions
+    clicks: clicks
+    conversions: conversions
+    platform_revenue: platform_revenue
+
+  # Google Ads report export (UI/CSV column labels).
+  google_ads:
+    Day: date
+    Campaign: campaign
+    Cost: spend
+    "Impr.": impressions
+    Clicks: clicks
+    Conversions: conversions
+    "Conv. value": platform_revenue
+
+  # Meta (Facebook/Instagram) Marketing API insights fields.
+  meta:
+    date_start: date
+    campaign_name: campaign
+    spend: spend
+    impressions: impressions
+    link_clicks: clicks
+    actions: conversions
+    action_values: platform_revenue
+
+  # TikTok Ads reporting API fields.
+  tiktok:
+    stat_time_day: date
+    campaign_name: campaign
+    spend: spend
+    impressions: impressions
+    clicks: clicks
+    conversions: conversions
+    total_complete_payment: platform_revenue
+
+  # LinkedIn Marketing API analytics fields.
+  linkedin:
+    dateRange.start: date
+    campaign: campaign
+    costInLocalCurrency: spend
+    impressions: impressions
+    clicks: clicks
+    externalWebsiteConversions: conversions
+    conversionValueInLocalCurrency: platform_revenue
+
+  # GA4 (Google Analytics 4) Data API -- mid-funnel ENGAGEMENT, no spend. GA4 keys on UTM:
+  # channel is derived from sessionSource (+ sessionMedium) via channel_aliases; geo from the
+  # property/region. The engagement columns merge onto the ad data on date x channel x
+  # campaign x geo (ad-metric columns stay null for GA4 rows). Only 1:1 fields are renamed.
+  ga4:
+    date: date
+    sessionSource: channel
+    sessionCampaignName: campaign
+    sessions: sessions
+    engagedSessions: engaged_sessions
+    screenPageViews: page_views

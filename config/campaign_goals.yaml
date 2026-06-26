@@ -1,0 +1,29 @@
+# Campaign goal tagging -> selects which pyramid tier is the primary scorecard.
+# Structural config: committed, no secrets.
+
+default_goal: conversion
+
+# goal -> the tier it is primarily judged on
+goal_primary_tier:
+  awareness: reach
+  consideration: intent
+  conversion: outcome
+
+# explicit per-campaign overrides (campaign name, lowercased -> goal). Highest priority,
+# so they win over the substring inference below (e.g. "nonbrand" -> conversion even though
+# it contains "brand").
+overrides:
+  brand: awareness
+  nonbrand: conversion
+  pmax_main: conversion
+  prospecting: awareness
+  retargeting: conversion
+  tiktok_awareness: awareness
+  linkedin_abm: consideration
+
+# fallback inference: the first goal whose any substring appears in the (lowercased)
+# campaign name wins. Used only when there is no explicit override.
+inference:
+  awareness: [awareness, brand, prospect, reach, video, ott, ctv, upper]
+  consideration: [consideration, engagement, traffic, abm, lead, nurture, mid]
+  conversion: [conversion, retarget, sales, purchase, performance, pmax, shopping, lower]

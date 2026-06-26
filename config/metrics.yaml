@@ -1,0 +1,114 @@
+# Tiered metric taxonomy — the "KPI pyramid". Structural config: committed, no secrets.
+#
+# Each metric:
+#   key             : stable identifier
+#   label           : display name
+#   tier            : reach | intent | outcome  (base -> apex of the funnel pyramid)
+#   formula         : arithmetic over SUMMED canonical base quantities (see list below),
+#                     i.e. a ratio of sums (CTR = sum(clicks)/sum(impressions)), NOT a mean
+#                     of per-row ratios. Computed at whatever grouping reporting asks for.
+#   format          : count | currency | pct | ratio   (how to render it)
+#   higher_is_better: true if up is good; false for cost/efficiency metrics
+#
+# Base quantities available to formulas (summed over the grouping):
+#   spend impressions clicks conversions platform_revenue
+#   sessions engaged_sessions page_views video_views
+# Intent-tier metrics need engagement (sessions, ...), populated by GA4 / the synthetic
+# source; where engagement was never measured they evaluate to null, not a misleading 0.
+
+metrics:
+  # --- reach / awareness (base of the pyramid) ---
+  - key: impressions
+    label: Impressions
+    tier: reach
+    formula: impressions
+    format: count
+    higher_is_better: true
+  - key: clicks
+    label: Clicks
+    tier: reach
+    formula: clicks
+    format: count
+    higher_is_better: true
+  - key: ctr
+    label: CTR
+    tier: reach
+    formula: clicks / impressions
+    format: pct
+    higher_is_better: true
+  - key: cpm
+    label: CPM
+    tier: reach
+    formula: spend / impressions * 1000
+    format: currency
+    higher_is_better: false
+  - key: cpc
+    label: CPC
+    tier: reach
+    formula: spend / clicks
+    format: currency
+    higher_is_better: false
+
+  # --- intent / engagement (middle; fed by GA4 / web-analytics) ---
+  - key: sessions
+    label: Sessions
+    tier: intent
+    formula: sessions
+    format: count
+    higher_is_better: true
+  - key: engagement_rate
+    label: Engagement rate
+    tier: intent
+    formula: engaged_sessions / sessions
+    format: pct
+    higher_is_better: true
+  - key: pages_per_session
+    label: Pages / session
+    tier: intent
+    formula: page_views / sessions
+    format: ratio
+    higher_is_better: true
+  - key: video_views
+    label: Video views
+    tier: intent
+    formula: video_views
+    format: count
+    higher_is_better: true
+  - key: cost_per_session
+    label: Cost / session
+    tier: intent
+    formula: spend / sessions
+    format: currency
+    higher_is_better: false
+
+  # --- outcome / action (apex; the campaign's ultimate goal) ---
+  - key: conversions
+    label: Conversions
+    tier: outcome
+    formula: conversions
+    format: count
+    higher_is_better: true
+  - key: conversion_rate
+    label: Conversion rate
+    tier: outcome
+    formula: conversions / sessions
+    format: pct
+    higher_is_better: true
+  - key: cpa
+    label: CPA
+    tier: outcome
+    formula: spend / conversions
+    format: currency
+    higher_is_better: false
+  - key: roas
+    label: ROAS
+    tier: outcome
+    formula: platform_revenue / spend
+    format: ratio
+    higher_is_better: true
+  - key: revenue
+    label: Attributed revenue
+    tier: outcome
+    formula: platform_revenue
+    format: currency
+    higher_is_better: true

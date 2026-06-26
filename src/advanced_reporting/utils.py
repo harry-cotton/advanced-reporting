@@ -1,0 +1,82 @@
+"""Small shared helpers: project paths and config loading."""
+from __future__ import annotations
+import os
+from pathlib import Path
+import yaml
+
+# Canonical ad columns, kept here so the built-in mappings fallback has no import
+# dependency on the ingestion package (avoids any import cycle).
+_CANONICAL_AD_COLS = (
+    "date", "channel", "campaign", "spend",
+    "impressions", "clicks", "conversions", "platform_revenue",
+)
+
+# Used only when config/mappings.yaml is missing, so clean.py / ingestion never hard-fail.
+# channel_aliases must stay in sync with transform/clean.py's fallback literal.
+_DEFAULT_MAPPINGS = {
+    "channel_aliases": {
+        "facebook": "meta", "fb": "meta", "instagram": "meta", "ig": "meta",
+        "google": "google_search", "search": "google_search", "google_search": "google_search",
+        "pmax": "google_pmax", "performance_max": "google_pmax", "google_pmax": "google_pmax",
+        "tik_tok": "tiktok", "tik-tok": "tiktok", "tiktok": "tiktok",
+        "linked_in": "linkedin", "linkedin": "linkedin", "meta": "meta",
+    },
+    "sources": {"default": {c: c for c in _CANONICAL_AD_COLS}},
+}
+
+
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def load_config(path: str | Path | None = None) -> dict:
+    """Load config.yaml if present, else fall back to config.example.yaml."""
+    root = project_root()
+    if path is None:
+        path = root / "config" / "config.yaml"
+        if not Path(path).exists():
+            path = root / "config" / "config.example.yaml"
+    with open(path) as fh:
+        return yaml.safe_load(fh)
+
+
+def load_env_file(path: str | Path | None = None) -> None:
+    """Load a ``.env`` file into ``os.environ`` (dependency-free, no python-dotenv).
+
+    Parses ``KEY=VALUE`` lines from ``<project_root>/.env`` if present, skipping blanks
+    and ``#`` comments and stripping surrounding quotes. Existing environment variables
+    are NOT overwritten (the real environment wins over the file). Missing file is a
+    no-op, so this is always safe to call before reading credentials.
+    """
+    p = Path(path) if path is not None else project_root() / ".env"
+    if not p.exists():
+        return
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+def load_mappings(path: str | Path | None = None) -> dict:
+    """Load config/mappings.yaml (channel aliases + per-source column maps).
+
+    Falls back to built-in defaults if the file is absent, and backfills any
+    missing top-level section, so callers always get both keys present.
+    """
+    root = project_root()
+    if path is None:
+        path = root / "config" / "mappings.yaml"
+    p = Path(path)
+    if not p.exists():
+        return _DEFAULT_MAPPINGS
+    with open(p) as fh:
+        data = yaml.safe_load(fh) or {}
+    return {
+        "channel_aliases": data.get("channel_aliases", _DEFAULT_MAPPINGS["channel_aliases"]),
+        "sources": data.get("sources", _DEFAULT_MAPPINGS["sources"]),
+    }
