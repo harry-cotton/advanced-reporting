@@ -17,7 +17,7 @@ from advanced_reporting.reporting.charts import plot_all
 from advanced_reporting.reporting.commentary import generate_commentary
 
 
-def run():
+def run(lens=None):
     cfg = load_config()
     m, rep = cfg["modeling"], cfg["reporting"]
     q = cfg.get("quality", {})
@@ -61,6 +61,12 @@ def run():
     (outdir / "commentary.md").write_text(
         generate_commentary(result, creport, m["target"]), encoding="utf-8")
 
+    if lens:
+        from advanced_reporting.reporting.lens import lens_report
+        lens_path = outdir / "lens_report.md"
+        lens_path.write_text(lens_report(weekly, lens)["narrative"], encoding="utf-8")
+        print(f"  lens report -> {lens_path}")
+
     max_missing = max(dq["pct_missing_per_column"].values(), default=0.0)
     print("Pipeline complete.")
     print(f"  cleaned {creport['rows_in']:,} -> {creport['rows_out']:,} rows "
@@ -78,4 +84,8 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    _ap = argparse.ArgumentParser(description="Run the reporting pipeline.")
+    _ap.add_argument("--lens", default=None,
+                     help="free-text report lens, e.g. 'this is an awareness campaign'")
+    run(lens=_ap.parse_args().lens)

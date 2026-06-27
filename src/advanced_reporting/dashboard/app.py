@@ -15,6 +15,7 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.reporting import metrics as M  # noqa: E402
+from advanced_reporting.reporting import lens as L  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting", layout="wide")
 st.title("Advanced Reporting — Campaign Dashboard")
@@ -44,7 +45,16 @@ goal = st.sidebar.selectbox(
     index=goal_list.index(default_goal) if default_goal in goal_list else 0)
 primary = M.primary_tier(goal, goals_cfg)
 
+lens_text = st.sidebar.text_input("Report lens (free text)",
+                                  placeholder="e.g. this is an awareness campaign")
+lens_spec = None
+if lens_text.strip():
+    lens_spec = L.parse_lens(lens_text)
+    goal, primary = lens_spec.goal, lens_spec.primary_tier
+
 f = m[m["channel"].isin(sel)]
+if lens_spec is not None and lens_spec.channels:
+    f = f[f["channel"].isin(lens_spec.channels)]
 if isinstance(dr, tuple) and len(dr) == 2:
     f = f[(f["date"] >= pd.Timestamp(dr[0])) & (f["date"] <= pd.Timestamp(dr[1]))]
 if f.empty:
@@ -83,6 +93,10 @@ for tier in ["outcome", "intent", "reach"]:
     for col, r in zip(cols, rows):
         col.metric(r["label"], M.format_value(r["value"], r["format"]))
     st.divider()
+
+if lens_spec is not None:
+    st.subheader("Lens report")
+    st.markdown(L.render_narrative(lens_spec, f))
 
 # --- funnel pass-through / drop-off ---
 st.subheader("Funnel & drop-off")
