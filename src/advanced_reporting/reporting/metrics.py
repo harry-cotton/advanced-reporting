@@ -8,6 +8,7 @@ per-geo). Intent-tier metrics need engagement columns (sessions, ...); where tho
 never measured they evaluate to NaN rather than a misleading zero.
 """
 from __future__ import annotations
+import math
 from pathlib import Path
 
 import numpy as np
@@ -135,3 +136,62 @@ def tag_campaign_goals(campaigns, goals: dict | None = None) -> pd.DataFrame:
     out["goal"] = out["campaign"].map(lambda c: resolve_goal(c, goals))
     out["primary_tier"] = out["goal"].map(lambda gl: primary_tier(gl, goals))
     return out
+
+
+# --- Dashboard helpers -------------------------------------------------------------
+
+FUNNEL_STAGES = ["impressions", "clicks", "sessions", "engaged_sessions", "conversions"]
+_STAGE_LABEL = {
+    "impressions": "Impressions", "clicks": "Clicks", "sessions": "Sessions",
+    "engaged_sessions": "Engaged sessions", "conversions": "Conversions",
+}
+
+
+def funnel(weekly: pd.DataFrame) -> pd.DataFrame:
+    """National funnel volumes + step pass-through rates (the drop-off view).
+
+    Each stage's ``step_rate`` is stage / previous available stage. Stages whose column
+    is absent or never measured (engagement may be missing) are skipped, so the funnel
+    collapses gracefully to whatever stages exist.
+    """
+    totals = _totals(weekly)
+    rows, prev_val, prev_stage = [], None, None
+    for stage in FUNNEL_STAGES:
+        v = totals.get(stage)
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            continue
+        rate = (v / prev_val) if (prev_val not in (None, 0)) else float("nan")
+        rows.append({"stage": stage, "label": _STAGE_LABEL.get(stage, stage),
+                     "value": float(v), "from": prev_stage, "step_rate": rate})
+        prev_val, prev_stage = v, stage
+    return pd.DataFrame(rows, columns=["stage", "label", "value", "from", "step_rate"])
+
+
+def _money(x: float) -> str:
+    ax = abs(x)
+    if ax >= 1e6:
+        return f"${x/1e6:.2f}M"
+    if ax >= 1e3:
+        return f"${x/1e3:.1f}k"
+    return f"${x:,.2f}"
+
+
+def format_value(value, fmt: str) -> str:
+    """Render a metric value per its format (pct | currency | count | ratio); NaN -> em dash."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return "—"
+    if fmt == "pct":
+        return f"{value*100:.1f}%"
+    if fmt == "currency":
+        return _money(value)
+    if fmt == "count":
+        return f"{value:,.0f}"
+    if fmt == "ratio":
+        return f"{value:.2f}x"
+    return f"{value:,.2f}"
+
+
+def pyramid(weekly: pd.DataFrame, *, registry=None) -> dict:
+    """Group national metrics by tier for the pyramid view: ``{tier: [metric records]}``."""
+    long = compute_metrics(weekly, by=None, registry=registry)
+    return {tier: long[long["tier"] == tier].to_dict("records") for tier in TIERS}
