@@ -7,9 +7,9 @@ high-signal. Owner: Harry.
 
 An end-to-end reporting tool for advertising & marketing campaigns. It **cleanses and
 organizes** granular campaign data, feeds it into **Media Mix Modeling (MMM)**, then
-**compiles, visualizes, and writes commentary** on the results — plus a basic dashboard
-of standard (non-MMM) metrics. The long-term goal is automation, live data connectors,
-and agentic reporting.
+**compiles, visualizes, and writes commentary** on the results — plus a **goal-aware dashboard**
+(KPI pyramid + free-text report lens) over standard metrics. The long-term goal is automation,
+live data connectors, and agentic reporting.
 
 ## How we work (the workflow)
 
@@ -59,8 +59,13 @@ store the pipeline reads from, so history grows over time.
 3. **`mmm/`** — `base.py` (`BaseMMM` + `MMMResult`), `transforms.py` (adstock / Hill
    saturation), `baseline.py` (works), `meridian_engine.py` (target engine, guarded),
    `factory.py` (`get_engine`).
-4. **`reporting/`** — `charts.py` (matplotlib), `commentary.py` (uncertainty-aware, hedged).
-5. **`dashboard/app.py`** — Streamlit view of standard non-MMM metrics.
+4. **`reporting/`** — `charts.py` (matplotlib); `commentary.py` (uncertainty-aware, hedged);
+   `metrics.py` (tiered **KPI-pyramid** taxonomy — reach/intent/outcome — from `config/metrics.yaml`,
+   campaign-goal tagging from `config/campaign_goals.yaml`, plus funnel + value-format helpers);
+   `lens.py` (**free-text report lens**: NL intent → `ReportSpec` → deterministic metrics + a
+   tailored narrative; deterministic keyword parser is the default, guarded LLM path optional).
+5. **`dashboard/app.py`** — Streamlit dashboard: the goal-aware **KPI pyramid** + goal-lens
+   selector + funnel drop-off + a free-text lens box, alongside standard non-MMM metrics.
 
 The business KPI / model target (`revenue`) is a separate weekly file
 (`data/raw/business_kpi_weekly.csv`), merged in `build_modeling_table`; the canonical history
@@ -92,14 +97,15 @@ holds the granular media data.
   `advanced_reporting`. Scripts insert `src` on `sys.path`.
 - Config in `config/config.yaml` (gitignored; falls back to `config.example.yaml`). Key blocks:
   `data` (source, geos, start/end window), `modeling`, `quality` (`spike_factor`, `fill_freq`),
-  `reporting`. `config/mappings.yaml` (channel aliases + per-source column maps) **is committed**
-  — structural config, no secrets or data.
+  `reporting`. Committed structural config (no secrets/data): `config/mappings.yaml` (channel
+  aliases + per-source column maps), `config/metrics.yaml` (the metric taxonomy), and
+  `config/campaign_goals.yaml` (goal tagging + goal→tier map).
 - **Secrets in `.env` (gitignored). NEVER commit API keys, tokens, or data.** `.gitignore`
   excludes `.env`, `config/config.yaml`, `data/`, and `outputs/`.
 - New MMM engines go behind `BaseMMM` and return an `MMMResult`; new data sources go behind
   `DataSource` and return the canonical schema — so reporting/dashboard stay agnostic.
 - Tests: `pytest` in `tests/` (`pythonpath=src` set in `pyproject.toml`). Add a test when you
-  add a layer or behavior. (Currently **43 passing**.)
+  add a layer or behavior. (Currently **70 passing**.)
 - Keep dependencies light (pandas / numpy / scipy / matplotlib / pyyaml / streamlit / pyarrow).
   Meridian is the one heavy, optional dep — install separately.
 
@@ -110,7 +116,8 @@ pip install -r requirements.txt
 python scripts/generate_sample_data.py        # synthetic CSVs (known ground-truth DGP)
 python scripts/ingest.py --source synthetic    # extract -> immutable pulls -> history.parquet (+ manifest)
 python scripts/run_pipeline.py                 # store -> clean -> MMM -> outputs/ (charts, commentary, data_quality.md)
-streamlit run src/advanced_reporting/dashboard/app.py
+python scripts/run_pipeline.py --lens "awareness campaign"   # also writes outputs/lens_report.md
+streamlit run src/advanced_reporting/dashboard/app.py        # KPI pyramid + goal lens + free-text lens box
 pytest -q
 ```
 
@@ -123,11 +130,6 @@ pytest -q
 
 ## Roadmap
 
-- **Goal-aware reporting layer (active):** a tiered **KPI-pyramid** metric taxonomy
-  (reach / intent / outcome) in config, campaign-goal tagging, an elevated dashboard, and a
-  **free-text report lens** (NL intent → report spec → deterministic metrics + tailored
-  narrative). Mid-funnel (intent) tier fed by **GA4 / web-analytics**; step 1 done (schema +
-  synthetic engagement + `GA4Source` skeleton).
 - **Connectors:** implement the `connectors.py` skeletons (fill in each platform's API call,
   map columns via `config/mappings.yaml`) — incl. **GA4** for engagement — or wire Supermetrics
   for one-API multi-platform pulls. Add scheduled incremental pulls so history keeps accumulating.
@@ -139,11 +141,12 @@ pytest -q
 
 ## Status
 
-Phase 1 (thin slice) and the **Phase 2 data layer** are complete and passing (**43 tests**).
-The pipeline runs end-to-end on the synthetic source through the durable daily store, emits the
-national + geo×weekly modeling tables and a data-quality report, and fits the baseline MMM
-(synthetic run ≈ R² 0.85 / holdout ≈ 0.76). The canonical schema now carries optional mid-funnel
-engagement columns (populated on synthetic; `GA4Source` skeleton ready) — step 1 of the goal-aware
-reporting layer; engagement rides in the store but is **not yet aggregated** into the modeling
-table. Real-platform connectors remain fill-in-the-API skeletons; small or collinear channels
-still show wide intervals — the motivation for Meridian's Bayesian priors and geo-level modeling.
+Phase 1 (thin slice), the **Phase 2 data layer**, and the full **goal-aware reporting layer** are
+complete and passing (**70 tests**), all on synthetic data. The pipeline runs end-to-end through
+the durable daily store, emits the national + geo×weekly modeling tables and a data-quality report,
+fits the baseline MMM (synthetic run ≈ R² 0.85 / holdout ≈ 0.76), and the dashboard renders the
+KPI pyramid + goal lens + free-text report lens. The schema carries the mid-funnel engagement
+(intent) tier (populated on synthetic; `GA4Source` skeleton ready), though engagement is **not yet
+aggregated** into the MMM modeling table. Real-platform connectors remain fill-in-the-API skeletons;
+small or collinear channels still show wide intervals — the motivation for Meridian's Bayesian
+priors and geo-level modeling.
