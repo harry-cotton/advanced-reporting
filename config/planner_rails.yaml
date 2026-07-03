@@ -1,0 +1,88 @@
+# Campaign-planner RAILS — committed structural config, NO secrets.
+#
+# These are HARD CONSTRAINTS the planner enforces deterministically (planner/validate.py):
+# the LLM may only select and justify WITHIN them; it can never widen them. Budget numbers
+# come from planner/allocator.py, never the LLM.
+#
+# Channel vocab is aligned with config/config.example.yaml `modeling.channel_spend_cols` and
+# the naming generator's CHANNEL_CANON, so plans round-trip cleanly into names/UTMs.
+
+campaign:
+  default_market: US
+  default_version: V1
+
+# Allowed platforms (canonical channel names). A plan channel outside this list is rejected.
+platforms:
+  - meta
+  - tiktok
+  - google_search
+  - google_pmax
+  - linkedin
+
+budget_rules:
+  min_pct_per_channel: 0.05      # each funded channel gets >= 5% of total
+  max_pct_per_channel: 0.50      # ... and <= 50% of total (no single-channel plans)
+  reconcile_tolerance: 0.01      # node budgets must sum to total within 1%
+  no_mmm_strategy: prior_weighted  # even | prior_weighted (when no fitted MMM is available)
+
+caps:
+  max_channels: 4                # platforms per plan
+  max_audiences_per_stage: 4
+  max_creatives_per_audience: 3
+
+# Audience library, keyed by goal. The planner draws audiences from here (never invents them).
+audience_library:
+  awareness:
+    - {audience_type: PROSPECT, audience_detail: BROAD, placement: FEED}
+    - {audience_type: PROSPECT, audience_detail: INT-CATEGORY, placement: FEED}
+    - {audience_type: PROSPECT, audience_detail: LAL-1PCT, placement: FEED}
+  consideration:
+    - {audience_type: ENGAGED, audience_detail: SITE-VISIT-30D, placement: FEED}
+    - {audience_type: ENGAGED, audience_detail: VIDEO-VIEW-50, placement: REELS}
+  conversion:
+    - {audience_type: RETARGET, audience_detail: CART-ABANDON, placement: FEED}
+    - {audience_type: RETARGET, audience_detail: PDP-VIEW-30D, placement: FEED}
+
+# goal -> funnel objective + the channels that lead at that stage. Goals match
+# config/campaign_goals.yaml (awareness/consideration/conversion).
+funnel:
+  awareness:
+    objective: AWARENESS
+    lead_channels: [tiktok, meta]
+  consideration:
+    objective: CONSIDER
+    lead_channels: [meta, linkedin]
+  conversion:
+    objective: CONVERT
+    lead_channels: [google_search, google_pmax, meta]
+
+# Creative-angle library, keyed by objective.
+creatives:
+  AWARENESS:
+    - {creative: BRANDHERO, format: VID, size: 9x16}
+  CONSIDER:
+    - {creative: BRANDHERO, format: VID, size: 9x16}
+    - {creative: HOWITWORKS, format: STATIC, size: 1x1}
+  CONVERT:
+    - {creative: SUMMERSALE, format: STATIC, size: 1x1}
+    - {creative: SUMMERSALE, format: VID, size: 9x16}
+
+brand_safety:
+  blocked_placements: []          # placements that must never appear in a plan
+
+llm:
+  model: claude-opus-4-8          # configurable; deterministic default path needs no model
+  max_tokens: 1500
+  pricing:                        # USD per 1M tokens, for the tracked cost metric
+    input: 5.0
+    output: 25.0
+
+# Pointer to the naming vocab so the planner stays in lockstep with the generator.
+naming:
+  generator_path: naming/naming_generator.py
+  plan_columns: [market, channel, objective, audience_type, audience_detail,
+                 creative, format, size, placement, version]
+  default_scheme:
+    - [Campaign, "market, channel, objective, audience_type", "_"]
+    - [Ad Set, "audience_type, audience_detail, placement", "_"]
+    - [Ad, "creative, format, size, version", "_"]

@@ -19,11 +19,13 @@ live data connectors, and agentic reporting.
 - When Harry pastes a brief or idea from Cowork, treat it as the spec. Ask before large
   architectural changes; prefer Plan mode for anything non-trivial.
 
-## Architecture — five layers (`src/advanced_reporting/`)
+## Architecture — six layers (`src/advanced_reporting/`)
 
 **Data flow:** `scripts/ingest.py` (extract → durable store) → `scripts/run_pipeline.py`
 (clean → model → report). Extraction is **decoupled** from modeling: pulls accumulate in a
-store the pipeline reads from, so history grows over time.
+store the pipeline reads from, so history grows over time. A second, forward path —
+`scripts/plan_campaign.py` — consumes the same store + a fitted `MMMResult` to produce a
+`CampaignPlan` that feeds the naming generator.
 
 1. **`ingestion/`** — extraction layer, architected so automating real platforms is just
    "fill in the API call":
@@ -66,6 +68,19 @@ store the pipeline reads from, so history grows over time.
    tailored narrative; deterministic keyword parser is the default, guarded LLM path optional).
 5. **`dashboard/app.py`** — Streamlit dashboard: the goal-aware **KPI pyramid** + goal-lens
    selector + funnel drop-off + a free-text lens box, alongside standard non-MMM metrics.
+6. **`planner/`** — turns *goals + rails* into a validated **`CampaignPlan`** that feeds the
+   naming generator (Plan rows → names + UTMs). Same spine as `lens.py`: deterministic default
+   + a **guarded LLM path** (one structured `claude-opus-4-8` call when `ANTHROPIC_API_KEY` is
+   set). The **LLM only selects/justifies, clipped to the rails** (it can't invent options or
+   budgets); **all numbers come from the deterministic `allocator`** (marginal-return
+   water-filling against the MMM response curves under the rails' min/max; rules fallback when
+   no MMM). `schema.py` (`CampaignPlan` + `to_plan_rows()` = the generator's exact `PLAN_COLS`),
+   `evidence.py` (CPA/ROAS/CVR from the store, incremental return + saturation from `MMMResult`,
+   platform-forecast stubs), `allocator.py`, `planner.py` (`plan_campaign(goals, rails)` + an LLM
+   trace with token cost), `validate.py` (rails enforcement — never trusts the LLM), `factory.py`
+   (`get_planner`), `naming_bridge.py` (writes the generator's Plan xlsx). Rails =
+   `config/planner_rails.yaml` (committed hard constraints). The **`naming/`** generator (repo
+   root, dep `openpyxl`) is the encode tool the planner feeds.
 
 The business KPI / model target (`revenue`) is a separate weekly file
 (`data/raw/business_kpi_weekly.csv`), merged in `build_modeling_table`; the canonical history
@@ -90,6 +105,13 @@ holds the granular media data.
   platform or the engine.
 - **Commentary must stay uncertainty-aware**: always report 90% intervals, hedge causal
   language, and flag channels the model can't identify. Never over-claim causation.
+- **Planner = thin "LLM-selects, optimizer-decides" layer** (`planner/`, built): no heavy agent
+  framework. The guarded LLM proposes only the *qualitative* plan (funnel / audiences / creatives),
+  clipped to the rails; the deterministic `allocator` owns **every budget** (optimized against the
+  MMM response curves — platform numbers are walled-garden, so used for reach/feasibility only,
+  never cross-channel allocation). Feed the LLM only goals + rails + compact evidence (never raw
+  tables); trace token cost. Same guarded-path pattern as `lens.py`; pluggable via `planner/factory.py`.
+  Model access sits behind one `_llm_call` swap point (Bedrock / Vertex / direct = one-line swap).
 
 ## Conventions
 
@@ -98,16 +120,18 @@ holds the granular media data.
 - Config in `config/config.yaml` (gitignored; falls back to `config.example.yaml`). Key blocks:
   `data` (source, geos, start/end window), `modeling`, `quality` (`spike_factor`, `fill_freq`),
   `reporting`. Committed structural config (no secrets/data): `config/mappings.yaml` (channel
-  aliases + per-source column maps), `config/metrics.yaml` (the metric taxonomy), and
-  `config/campaign_goals.yaml` (goal tagging + goal→tier map).
+  aliases + per-source column maps), `config/metrics.yaml` (the metric taxonomy),
+  `config/campaign_goals.yaml` (goal tagging + goal→tier map), and `config/planner_rails.yaml`
+  (planner hard constraints: allowed platforms, audience library, budget/cap rules, naming vocab).
 - **Secrets in `.env` (gitignored). NEVER commit API keys, tokens, or data.** `.gitignore`
   excludes `.env`, `config/config.yaml`, `data/`, and `outputs/`.
 - New MMM engines go behind `BaseMMM` and return an `MMMResult`; new data sources go behind
   `DataSource` and return the canonical schema — so reporting/dashboard stay agnostic.
 - Tests: `pytest` in `tests/` (`pythonpath=src` set in `pyproject.toml`). Add a test when you
-  add a layer or behavior. (Currently **70 passing**.)
-- Keep dependencies light (pandas / numpy / scipy / matplotlib / pyyaml / streamlit / pyarrow).
-  Meridian is the one heavy, optional dep — install separately.
+  add a layer or behavior. (Currently **85 passing**.)
+- Keep dependencies light (pandas / numpy / scipy / matplotlib / pyyaml / streamlit / pyarrow /
+  openpyxl — the last for naming-generator + planner xlsx I/O). `anthropic` is optional/lazy
+  (only the guarded LLM paths import it). Meridian is the one heavy, optional dep — install separately.
 
 ## Run it
 
@@ -117,9 +141,14 @@ python scripts/generate_sample_data.py        # synthetic CSVs (known ground-tru
 python scripts/ingest.py --source synthetic    # extract -> immutable pulls -> history.parquet (+ manifest)
 python scripts/run_pipeline.py                 # store -> clean -> MMM -> outputs/ (charts, commentary, data_quality.md)
 python scripts/run_pipeline.py --lens "awareness campaign"   # also writes outputs/lens_report.md
+python scripts/plan_campaign.py --goal awareness --budget 100000  # goals+rails -> CampaignPlan -> names/UTMs
 streamlit run src/advanced_reporting/dashboard/app.py        # KPI pyramid + goal lens + free-text lens box
 pytest -q
 ```
+
+`plan_campaign.py` is deterministic by default; set `ANTHROPIC_API_KEY` (or `--use-llm`) for the
+guarded LLM selection. Writes `outputs/campaign_plan.json` (+ budgets/trace), `campaign_plan.xlsx`,
+and (unless `--no-names`) runs the generator to `outputs/trafficking_sheet.xlsx`.
 
 ## Git / two-machine setup
 
@@ -136,17 +165,25 @@ pytest -q
 - **Meridian:** validate and complete the `Analyzer → MMMResult` mapping.
 - **Geo-level MMM:** use `modeling_table_geo.csv` (geo×weekly) for a hierarchical/Bayesian
   model — cross-geo variation is the main lever given limited calendar history.
-- **Budget optimization + response-curve forecasting** on top of the model.
+- **Budget optimization** against response curves is **built** (`planner/allocator.py`);
+  response-curve **forecasting** on top of the model is still open.
+- **Planner follow-ups:** implement the `evidence.platform_forecasts` stubs (Google
+  ReachPlan/PerformancePlanner, Meta/TikTok/LinkedIn reach estimates — reach/feasibility only);
+  add the demographic/audience breakdown to `ingestion/schema.py` to unlock demo-level grounding
+  (`historical_performance_by_demo`); a browser-agent executor that actually books the plan.
 - **Possible AWS hosting:** containerize the model step (SageMaker / Batch / ECS).
 
 ## Status
 
-Phase 1 (thin slice), the **Phase 2 data layer**, and the full **goal-aware reporting layer** are
-complete and passing (**70 tests**), all on synthetic data. The pipeline runs end-to-end through
-the durable daily store, emits the national + geo×weekly modeling tables and a data-quality report,
-fits the baseline MMM (synthetic run ≈ R² 0.85 / holdout ≈ 0.76), and the dashboard renders the
-KPI pyramid + goal lens + free-text report lens. The schema carries the mid-funnel engagement
-(intent) tier (populated on synthetic; `GA4Source` skeleton ready), though engagement is **not yet
-aggregated** into the MMM modeling table. Real-platform connectors remain fill-in-the-API skeletons;
-small or collinear channels still show wide intervals — the motivation for Meridian's Bayesian
-priors and geo-level modeling.
+Phase 1 (thin slice), the **Phase 2 data layer**, the full **goal-aware reporting layer**, and the
+**campaign planner layer** are complete and passing (**85 tests**), all on synthetic data. The
+pipeline runs end-to-end through the durable daily store, emits the national + geo×weekly modeling
+tables and a data-quality report, fits the baseline MMM (synthetic run ≈ R² 0.85 / holdout ≈ 0.76),
+and the dashboard renders the KPI pyramid + goal lens + free-text report lens. The planner turns
+goals + rails into a validated `CampaignPlan` (deterministic default + guarded `claude-opus-4-8`
+selection; allocator owns budgets) and round-trips into the naming generator with zero warnings. The
+schema carries the mid-funnel engagement (intent) tier (populated on synthetic; `GA4Source` skeleton
+ready), though engagement is **not yet aggregated** into the MMM modeling table. Real-platform
+connectors + planner platform-forecasts remain fill-in-the-API skeletons; demo-level grounding awaits
+a schema extension; small or collinear channels still show wide intervals — the motivation for
+Meridian's Bayesian priors and geo-level modeling.

@@ -18,13 +18,9 @@ plain local dev folder.
 # pick any non-synced location
 mkdir C:\dev
 cd C:\dev
-# seed from the bundle that's in your Cowork "Advanced Reporting" folder
-git clone "C:\Users\harry\OneDrive\Documents\Claude\Projects\Advanced Reporting\advanced-reporting.bundle" advanced-reporting
+# clone from GitHub — the repo of record (never seed from a bundle or OneDrive copy)
+git clone https://github.com/harry-cotton/advanced-reporting.git
 cd advanced-reporting
-git remote remove origin            # bundle leaves a placeholder remote
-git remote add origin https://github.com/<you>/advanced-reporting.git
-git branch -M main
-git push -u origin main
 ```
 
 After this, also copy `CLAUDE.md` into the repo if it isn't already there, and commit it —

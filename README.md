@@ -89,27 +89,29 @@ Code lives in Git; **data and credentials do not** (`.gitignore` excludes `.env`
 > `.git` directory inside a synced folder fights the sync layer and can corrupt.
 > GitHub itself is the bridge between your two machines — not OneDrive.
 
-**Option A — clone the included bundle (preserves the initial commit):**
+**Setting up on any machine — clone from GitHub (the only bootstrap path):**
 
 ```bash
-git clone advanced-reporting.bundle advanced-reporting
+# pick a non-synced location
+mkdir C:\dev && cd C:\dev
+git clone https://github.com/harry-cotton/advanced-reporting.git
 cd advanced-reporting
-git remote remove origin
-git remote add origin https://github.com/<you>/advanced-reporting.git
-git push -u origin main
 ```
 
-**Option B — fresh init (run in a non-synced dev folder):**
+Then recreate `.venv`, `pip install -r requirements.txt`, and copy your local
+`.env` / `config/config.yaml` from the old machine if you have them (these never
+travel through Git). Regenerate data locally — it does not sync:
 
 ```bash
-git init && git add . && git commit -m "Initial scaffold: advanced-reporting v0.1"
-git branch -M main
-git remote add origin https://github.com/<you>/advanced-reporting.git
-git push -u origin main
+python scripts/generate_sample_data.py
+python scripts/ingest.py --source synthetic
 ```
 
-On the second machine: `git clone` from GitHub, recreate `.venv`, and copy your
-local `.env` / `config.yaml` (these never travel through Git).
+> **Data & credentials policy:** real client data and a real `.env` must **never**
+> live under a cloud-synced folder (OneDrive/Dropbox) — sync layers exfiltrate
+> everything `.gitignore` protects and retain deleted copies in version history.
+> Synthetic data is regenerable; real data gets its own non-synced home + backup
+> (e.g. S3) when it arrives.
 
 ## Roadmap
 

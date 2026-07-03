@@ -29,3 +29,9 @@ build/
 .DS_Store
 .vscode/
 .idea/
+
+# Repo snapshots — GitHub is the transfer mechanism, never a bundle in the repo
+*.bundle
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
