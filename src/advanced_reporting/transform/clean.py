@@ -15,10 +15,10 @@ from ..ingestion import schema, store
 
 METRIC_COLS = ["spend", "impressions", "clicks", "conversions", "platform_revenue"]
 
-# Mid-funnel engagement columns that are summable to weekly grain (avg_engagement_seconds is
-# a per-session average, not a sum, so it is intentionally excluded). Present only when an
-# analytics source (GA4) or the synthetic source populated them; absent on pure ad CSVs.
-ENGAGEMENT_COLS = ["sessions", "engaged_sessions", "page_views", "video_views"]
+# Summable extra columns carried through the weekly tables when present: the mid-funnel
+# engagement tier + GA4-measured key_events (avg_engagement_seconds is a per-session
+# average, not a sum, so it is intentionally excluded). Absent on pure ad CSVs.
+ENGAGEMENT_COLS = ["sessions", "engaged_sessions", "page_views", "video_views", "key_events"]
 
 # Kept as a fallback so standardize_channel still works if config/mappings.yaml is
 # missing or unreadable. Must stay in sync with mappings.yaml's channel_aliases.

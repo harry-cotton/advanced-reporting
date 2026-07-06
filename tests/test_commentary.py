@@ -54,3 +54,44 @@ def test_intervals_and_hedged_language_present():
     md = generate_commentary(res)
     assert "90%" in md and "associated with" in md
     assert "not proven causation" in md
+
+
+# --- descriptive (no-MMM) commentary: the file-drop phase-3 path -------------------------
+
+def _weekly_mba():
+    return pd.DataFrame({
+        "channel": ["meta", "google_search", "organic_search", "direct"],
+        "spend": [29_000.0, 27_000.0, 0.0, 0.0],
+        "impressions": [1e6, 2e5, 0.0, 0.0],
+        "clicks": [14_000.0, 5_400.0, 0.0, 0.0],
+        "conversions": [776.0, 303.0, 0.0, 0.0],
+        "platform_revenue": [0.0, 0.0, 0.0, 0.0],
+        "key_events": [388.0, 252.0, 412.0, 241.0],
+    })
+
+
+def test_descriptive_commentary_reports_claims_vs_measured():
+    from advanced_reporting.reporting.commentary import generate_descriptive_commentary
+    md = generate_descriptive_commentary(_weekly_mba())
+    assert "descriptive" in md.lower()
+    assert "No causal claims" in md
+    # the claims-vs-measured story: platforms claim 1,079, analytics measures 640
+    assert "1,079 conversions" in md and "640 key events" in md
+    # organic/direct shown as baseline context, not as paid channels
+    assert "organic_search" in md and "$0" not in md.split("Non-paid")[1][:200]
+    # markdown table well-formed: separator has the same cell count as the header
+    lines = md.splitlines()
+    hdr = next(line for line in lines if line.startswith("| Channel"))
+    sep = lines[lines.index(hdr) + 1]
+    assert hdr.count("|") == sep.count("|")
+    # never over-claims: no MMM-results language (mentioning the future MMM is fine)
+    assert "Est. contribution (90% CI)" not in md
+    assert "associated with an estimated" not in md
+
+
+def test_descriptive_commentary_without_key_events_degrades():
+    from advanced_reporting.reporting.commentary import generate_descriptive_commentary
+    wk = _weekly_mba().drop(columns=["key_events"])
+    md = generate_descriptive_commentary(wk)
+    assert "Platform claims vs analytics" not in md      # nothing measured to compare
+    assert "| Channel | Spend |" in md

@@ -16,6 +16,85 @@ def _money(x: float) -> str:
     return f"${x:,.0f}"
 
 
+def generate_descriptive_commentary(weekly, cleaning_report: dict | None = None,
+                                    kpi_label: str = "key events") -> str:
+    """Descriptive (non-causal) commentary for the no-MMM path.
+
+    Used when no business-KPI series exists yet (e.g. a file-drop deployment awaiting
+    CRM matchback): reports what each channel DID — spend, delivery, platform-claimed
+    conversions vs analytics-measured key events — and explicitly does not attribute.
+    """
+    d = weekly.copy()
+    has_ke = "key_events" in d.columns and d["key_events"].notna().any()
+    per = d.groupby("channel")[[c for c in ("spend", "impressions", "clicks",
+                                            "conversions", "key_events") if c in d.columns]] \
+           .sum(min_count=1)
+    paid = per[per["spend"] > 0].sort_values("spend", ascending=False)
+    nonpaid = per[per["spend"].fillna(0) <= 0]
+
+    L = ["# Campaign Performance — Descriptive Commentary\n"]
+    L.append("_No incrementality model yet (business-KPI series pending — e.g. CRM "
+             "matchback). Everything below is **descriptive**: what happened, per "
+             "platform's own reporting and analytics. No causal claims._\n")
+
+    total_spend = float(paid["spend"].sum())
+    L.append("## Paid channels\n")
+    L.append(f"Total spend {_money(total_spend)} across {len(paid)} channels.\n")
+    singular = kpi_label[:-1] if kpi_label.endswith("s") else kpi_label
+    cols = ["Channel", "Spend", "Clicks", "CPC", "Platform-claimed conv."]
+    if has_ke:
+        cols += [f"{kpi_label.title()} (analytics)", f"Cost / {singular}"]
+    L.append("| " + " | ".join(cols) + " |")
+    L.append("|" + "---|" * len(cols))
+    for ch, r in paid.iterrows():
+        cpc = r["spend"] / r["clicks"] if r.get("clicks") else float("nan")
+        cells = [str(ch), _money(r["spend"]), f"{r.get('clicks', 0):,.0f}",
+                 f"${cpc:,.2f}", f"{r.get('conversions', 0):,.0f}"]
+        if has_ke:
+            ke = r.get("key_events")
+            cpk = r["spend"] / ke if ke and ke == ke and ke > 0 else float("nan")
+            cells += [f"{ke:,.0f}" if ke == ke else "—",
+                      f"${cpk:,.0f}" if cpk == cpk else "—"]
+        L.append("| " + " | ".join(cells) + " |")
+    L.append("")
+
+    if has_ke:
+        claimed = float(paid["conversions"].sum())
+        measured = float(paid["key_events"].sum(min_count=1) or float("nan"))
+        if claimed and measured == measured:
+            L.append("## Platform claims vs analytics measurement\n")
+            L.append(f"Ad platforms collectively claim **{claimed:,.0f} conversions**; "
+                     f"analytics measures **{measured:,.0f} {kpi_label}** on the same "
+                     f"campaigns ({claimed / measured:.1f}x). Platforms self-attribute "
+                     "(view-through, modeled, overlapping credit), so the gap is expected "
+                     "— treat platform conversion counts as directional, analytics as the "
+                     "consistent yardstick, and neither as proof of incrementality.\n")
+
+    if not nonpaid.empty and has_ke:
+        L.append("## Non-paid traffic (baseline context)\n")
+        for ch, r in nonpaid.iterrows():
+            ke = r.get("key_events")
+            if ke == ke:
+                L.append(f"- **{ch}**: {ke:,.0f} {kpi_label}")
+        L.append("")
+
+    if cleaning_report:
+        cr = cleaning_report
+        L.append("## Data quality\n")
+        L.append(f"Ingested and cleansed {cr['rows_in']:,} rows → {cr['rows_out']:,} "
+                 f"({cr['duplicates_removed']} duplicates, {cr['negatives_clipped']} "
+                 f"negatives clipped, {cr['missing_values_filled']} missing filled).\n")
+
+    L.append("## What's needed for incrementality\n")
+    L.append("- A weekly business-KPI series (CRM matchback: applications started/"
+             "submitted) unlocks the MMM — modeled contribution per channel with "
+             "uncertainty intervals, instead of platform self-attribution.")
+    L.append("- Until then, budget decisions from this report should lean on cost "
+             "efficiency and analytics-measured outcomes, validated with holdout tests "
+             "where stakes are high.")
+    return "\n".join(L)
+
+
 def generate_commentary(result, cleaning_report: dict | None = None, target: str = "revenue") -> str:
     s = result.channel_summary
     fm = result.fit_metrics

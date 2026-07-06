@@ -100,6 +100,18 @@ metrics:
     formula: spend / conversions
     format: currency
     higher_is_better: false
+  - key: key_events
+    label: Key events (GA4)
+    tier: outcome
+    formula: key_events
+    format: count
+    higher_is_better: true
+  - key: cost_per_key_event
+    label: Cost / key event
+    tier: outcome
+    formula: spend / key_events
+    format: currency
+    higher_is_better: false
   - key: roas
     label: ROAS
     tier: outcome

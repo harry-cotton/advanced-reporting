@@ -530,3 +530,21 @@ def test_consolidate_idempotent_with_sidecars(tmp_path):
     h2 = store.read_history(hist)
     pd.testing.assert_frame_equal(h1, h2)
     assert m1["history_rows"] == m2["history_rows"] == 2
+
+
+def test_weekly_tables_carry_key_events():
+    df = _canon_rows([("2025-01-06", "meta", "p", "US-NE", 100.0)])
+    df["key_events"] = 7.0
+    cleaned, _ = clean_ad_data(df)
+    wk = clean.to_weekly(cleaned)
+    assert "key_events" in wk.columns and wk["key_events"].sum() == 7.0
+
+
+def test_registry_key_event_metrics_compute():
+    from advanced_reporting.reporting import metrics as M
+    wk = pd.DataFrame({"channel": ["meta"], "spend": [100.0], "impressions": [1000.0],
+                       "clicks": [10.0], "conversions": [2.0], "platform_revenue": [0.0],
+                       "key_events": [4.0]})
+    long = M.compute_metrics(wk).set_index("metric")
+    assert long.loc["key_events", "value"] == 4.0
+    assert long.loc["cost_per_key_event", "value"] == 25.0

@@ -4,6 +4,10 @@ project:
   currency: USD
 
 data:
+  # optional: restrict the pipeline to specific extraction sources (see the `source`
+  # column stamped by the store), e.g. [google_ads, meta_ads, linkedin_ads, ga4].
+  # null = use everything in the store. CLI --sources overrides.
+  sources: null
   source: synthetic          # active ad source: synthetic | csv | supermetrics |
                              #   google_ads | meta | tiktok | linkedin (see ingestion/factory.py)
   geos:                      # synthetic-only: a handful of geos to emit

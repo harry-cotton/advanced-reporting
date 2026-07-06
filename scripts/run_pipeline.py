@@ -17,7 +17,7 @@ from advanced_reporting.reporting.charts import plot_all
 from advanced_reporting.reporting.commentary import generate_commentary
 
 
-def run(lens=None):
+def run(lens=None, sources=None, no_mmm=False):
     cfg = load_config()
     m, rep = cfg["modeling"], cfg["reporting"]
     q = cfg.get("quality", {})
@@ -29,7 +29,24 @@ def run(lens=None):
     # 1. INGEST — read the durable store (consolidated from immutable pulls), not a live
     #    fetch. Populate it first with `python scripts/ingest.py --source <name>`.
     ad_raw = load_history()
-    kpi = CSVSource(ROOT / "data/raw/business_kpi_weekly.csv", "kpi").fetch()
+
+    # scope to specific extraction sources (config data.sources or --sources) so e.g.
+    # the synthetic DGP and a real file-drop scenario in the same store don't blend
+    sources = sources if sources is not None else cfg.get("data", {}).get("sources")
+    if sources and "source" in ad_raw.columns:
+        before = len(ad_raw)
+        ad_raw = ad_raw[ad_raw["source"].isin(list(sources))]
+        print(f"  source filter {sorted(sources)}: {before:,} -> {len(ad_raw):,} rows")
+        if ad_raw.empty:
+            raise SystemExit("  no rows left after the source filter — check data.sources")
+
+    # No business-KPI series -> no MMM: descriptive mode (dashboard + non-causal
+    # commentary). The KPI (e.g. CRM matchback) is what unlocks incrementality.
+    kpi_path = ROOT / "data/raw/business_kpi_weekly.csv"
+    if not no_mmm and not kpi_path.exists():
+        print(f"  {kpi_path.name} not found -> descriptive mode (no MMM)")
+        no_mmm = True
+    kpi = None if no_mmm else CSVSource(kpi_path, "kpi").fetch()
 
     # 2. CLEANSE + ORGANIZE (+ observable data-quality report)
     ad_clean, creport = clean_ad_data(ad_raw)
@@ -37,33 +54,42 @@ def run(lens=None):
     weekly_geo = to_weekly_geo(ad_clean)                 # geo x weekly (long)
     channel_metrics(weekly).to_csv(proc / "channel_weekly_metrics.csv", index=False)
     weekly_geo.to_csv(proc / "modeling_table_geo.csv", index=False)
-    model_df = build_modeling_table(weekly, kpi, m["channel_spend_cols"],
-                                    m["control_cols"], m["target"])
-    model_df.to_csv(proc / "modeling_table.csv", index=False)
 
     dq = data_quality_report(ad_raw, ad_clean, creport,
                              spike_factor=q.get("spike_factor", 3.0),
                              fill_freq=q.get("fill_freq", "W-MON"))
     (outdir / "data_quality.md").write_text(data_quality_markdown(dq), encoding="utf-8")
 
-    # 3. MODEL (engine selected in config)
-    engine = get_engine(m["engine"], train_frac=m.get("train_frac", 0.85),
-                        adstock_max_lag=m.get("adstock_max_lag", 8))
-    result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
-                        m["target"], m["date_col"])
-    result.channel_summary.to_csv(outdir / "channel_summary.csv", index=False)
-    result.contributions.to_csv(outdir / "contributions.csv", index=False)
-    (outdir / "fit_metrics.json").write_text(json.dumps(result.fit_metrics, indent=2),
-                                             encoding="utf-8")
+    result = recovery = None
+    charts = []
+    if no_mmm:
+        # descriptive mode: dashboard tables + non-causal commentary, no modeling
+        from advanced_reporting.reporting.commentary import generate_descriptive_commentary
+        (outdir / "commentary.md").write_text(
+            generate_descriptive_commentary(weekly, creport), encoding="utf-8")
+    else:
+        model_df = build_modeling_table(weekly, kpi, m["channel_spend_cols"],
+                                        m["control_cols"], m["target"])
+        model_df.to_csv(proc / "modeling_table.csv", index=False)
 
-    # 4. REPORT
-    charts = plot_all(result, outdir)
-    (outdir / "commentary.md").write_text(
-        generate_commentary(result, creport, m["target"]), encoding="utf-8")
+        # 3. MODEL (engine selected in config)
+        engine = get_engine(m["engine"], train_frac=m.get("train_frac", 0.85),
+                            adstock_max_lag=m.get("adstock_max_lag", 8))
+        result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
+                            m["target"], m["date_col"])
+        result.channel_summary.to_csv(outdir / "channel_summary.csv", index=False)
+        result.contributions.to_csv(outdir / "contributions.csv", index=False)
+        (outdir / "fit_metrics.json").write_text(json.dumps(result.fit_metrics, indent=2),
+                                                 encoding="utf-8")
 
-    # 5. VALIDATE vs known ground truth (synthetic runs only; no-op on real data)
-    from advanced_reporting.mmm.validation import validate_run
-    recovery = validate_run(outdir)
+        # 4. REPORT
+        charts = plot_all(result, outdir)
+        (outdir / "commentary.md").write_text(
+            generate_commentary(result, creport, m["target"]), encoding="utf-8")
+
+        # 5. VALIDATE vs known ground truth (synthetic runs only; no-op on real data)
+        from advanced_reporting.mmm.validation import validate_run
+        recovery = validate_run(outdir)
 
     if lens:
         from advanced_reporting.reporting.lens import lens_report
@@ -81,8 +107,12 @@ def run(lens=None):
           f"{len(dq['anomalies']['spend_spikes'])} spend-spike flags - "
           f"{len(dq['anomalies']['zero_spend_weeks'])} zero-spend-week flags - "
           f"currency {'MIXED' if dq['currency']['mixed'] else 'OK'}")
-    print(f"  engine={result.engine}  R2={result.fit_metrics['r2']:.3f}  "
-          f"holdoutR2={result.fit_metrics['test_r2']:.3f}")
+    if result is not None:
+        print(f"  engine={result.engine}  R2={result.fit_metrics['r2']:.3f}  "
+              f"holdoutR2={result.fit_metrics['test_r2']:.3f}")
+    else:
+        print("  descriptive mode: no MMM (add data/raw/business_kpi_weekly.csv — e.g. "
+              "CRM matchback — to unlock incrementality modeling)")
     if recovery is not None:
         print(f"  ground-truth recovery: {'PASS' if recovery['passed'] else 'FAIL'} — "
               f"{recovery['n_within_tolerance']}/{recovery['n_channels']} channels within "
@@ -97,4 +127,14 @@ if __name__ == "__main__":
     _ap = argparse.ArgumentParser(description="Run the reporting pipeline.")
     _ap.add_argument("--lens", default=None,
                      help="free-text report lens, e.g. 'this is an awareness campaign'")
-    run(lens=_ap.parse_args().lens)
+    _ap.add_argument("--sources", default=None,
+                     help="comma-separated extraction sources to include (e.g. "
+                          "google_ads,meta_ads,linkedin_ads,ga4); default: config "
+                          "data.sources, else all")
+    _ap.add_argument("--no-mmm", action="store_true",
+                     help="descriptive mode: dashboard tables + non-causal commentary, "
+                          "no MMM (automatic when business_kpi_weekly.csv is absent)")
+    _a = _ap.parse_args()
+    run(lens=_a.lens,
+        sources=[s.strip() for s in _a.sources.split(",")] if _a.sources else None,
+        no_mmm=_a.no_mmm)

@@ -21,7 +21,7 @@ TIERS = ("reach", "intent", "outcome")
 
 # Base quantities a formula may reference (summed over the grouping).
 BASE_INPUTS = ("spend", "impressions", "clicks", "conversions", "platform_revenue",
-               "sessions", "engaged_sessions", "page_views", "video_views")
+               "sessions", "engaged_sessions", "page_views", "video_views", "key_events")
 
 _VALID_FORMATS = ("count", "currency", "pct", "ratio")
 
