@@ -42,3 +42,17 @@ quality:
 
 reporting:
   output_dir: outputs
+  # Label for the analytics-measured outcome (GA4 key events) in dashboard prose,
+  # e.g. "start applications" for the MBA scenario. Default: "key events".
+  kpi_label: key events
+  # Optional spend plan for the Overview pacing block. Leave null to show run
+  # rate instead of pacing-vs-plan.
+  budget: null
+  # budget:
+  #   total: 100000            # planned spend for the flight
+  #   flight_weeks: 26         # flight length in weeks
+  # DEFERRED "External context" aside on the Overview: curated per-client notes
+  # only (one bullet per line), never generated content. Hidden until enabled.
+  macro_context:
+    enabled: false
+    notes_file: config/macro_notes.md

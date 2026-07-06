@@ -43,16 +43,8 @@ CHANNEL_COLORS = {
 }
 _EXTRA_COLORS = ["#C25B4E", "#6B8E23", "#B8860B", "#4682B4"]  # unmapped channels
 
-CHANNEL_LABELS = {
-    "google_search": "Google Search",
-    "google_demandgen": "Google Demand Gen",
-    "google_pmax": "Google PMax",
-    "meta": "Meta",
-    "linkedin": "LinkedIn",
-    "tiktok": "TikTok",
-    "organic_search": "Organic search",
-    "direct": "Direct",
-}
+# presentation names live with the (pure, testable) insight layer; re-exported here
+from .insights import CHANNEL_LABELS, channel_label  # noqa: E402, F401
 
 # d3-format strings for axes/hover, by semantic kind
 TICKFORMAT = {"currency": "$,.0f", "count": ",.0f", "pct": ".1%", "ratio": ".2f"}
@@ -62,17 +54,20 @@ def channel_color(channel: str, i: int = 0) -> str:
     return CHANNEL_COLORS.get(channel, _EXTRA_COLORS[i % len(_EXTRA_COLORS)])
 
 
-def channel_label(channel: str) -> str:
-    return CHANNEL_LABELS.get(channel, str(channel).replace("_", " ").title())
-
-
 # ---------------------------------------------------------------- page chrome
 def inject_css() -> None:
     """Editorial typography: serif headlines, calmer captions. Call once per page."""
     st.markdown(
         f"""<style>
-        h1, h2, h3 {{ font-family: {SERIF}; font-weight: 600; letter-spacing: -0.01em;
-                      color: {INK}; }}
+        h1, h2, h3,
+        [data-testid="stHeading"] h1, [data-testid="stHeading"] h2,
+        [data-testid="stHeading"] h3,
+        [data-testid="stMarkdownContainer"] h1,
+        [data-testid="stMarkdownContainer"] h2,
+        [data-testid="stMarkdownContainer"] h3 {{
+            font-family: {SERIF} !important; font-weight: 600;
+            letter-spacing: -0.01em; color: {INK};
+        }}
         [data-testid="stCaptionContainer"] {{ color: {INK_SOFT}; }}
         [data-testid="stMetricLabel"] {{ color: {INK_SOFT}; }}
         </style>""",
@@ -80,14 +75,24 @@ def inject_css() -> None:
     )
 
 
+def _escape_math(text: str) -> str:
+    # Streamlit markdown parses $...$ as LaTeX — money amounts must be escaped
+    return text.replace("$", "\\$")
+
+
 def action_title(insight: str, sub: str | None = None) -> None:
     """A chart's heading: an INSIGHT SENTENCE in serif, never a label.
 
     If a section can't state an insight, it doesn't belong on the narrative page.
     """
-    st.markdown(f"### {insight}")
+    st.markdown(f"### {_escape_math(insight)}")
     if sub:
         st.caption(sub)
+
+
+def prose(text: str) -> None:
+    """Render a woven narrative paragraph (markdown, money-safe)."""
+    st.markdown(_escape_math(text))
 
 
 # ---------------------------------------------------------------- the chart standard
@@ -105,16 +110,16 @@ def style_fig(fig: go.Figure, *, yfmt: str | None = None, xfmt: str | None = Non
         hovermode="x unified",
         hoverlabel=dict(font=dict(family=SANS, size=12), bgcolor=PAPER,
                         bordercolor=GRID, font_color=INK),
-        title=None,                       # action titles live outside the figure
+        title_text="",                    # action titles live outside the figure
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title=None,
                     font=dict(size=12, color=INK_SOFT)),
         showlegend=legend,
     )
     fig.update_xaxes(showgrid=False, zeroline=False, linecolor=GRID,
-                     ticks="outside", tickcolor=GRID,
+                     ticks="outside", tickcolor=GRID, automargin=True,
                      tickformat=TICKFORMAT.get(xfmt, xfmt))
     fig.update_yaxes(showgrid=True, gridcolor=GRID, gridwidth=1, zeroline=False,
-                     linecolor="rgba(0,0,0,0)", ticks="",
+                     linecolor="rgba(0,0,0,0)", ticks="", automargin=True,
                      tickformat=TICKFORMAT.get(yfmt, yfmt), rangemode="tozero")
     return fig
 
@@ -134,5 +139,7 @@ def plotly_chart(fig: go.Figure, *, yfmt: str | None = None, xfmt: str | None = 
                  height: int = 380, legend: bool = True) -> None:
     """THE way to render a chart: house style + quiet chrome. All pages use this."""
     style_fig(fig, yfmt=yfmt, xfmt=xfmt, height=height, legend=legend)
-    st.plotly_chart(fig, use_container_width=True,
+    # theme=None: the house style owns the figure — Streamlit's plotly template
+    # otherwise overrides fonts/colors and injects a stray empty title
+    st.plotly_chart(fig, use_container_width=True, theme=None,
                     config={"displayModeBar": False})

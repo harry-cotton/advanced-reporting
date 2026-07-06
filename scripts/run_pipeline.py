@@ -63,7 +63,11 @@ def run(lens=None, sources=None, no_mmm=False):
     result = recovery = None
     charts = []
     if no_mmm:
-        # descriptive mode: dashboard tables + non-causal commentary, no modeling
+        # descriptive mode: dashboard tables + non-causal commentary, no modeling.
+        # Clear any PREVIOUS run's MMM artifacts — leaving them would let the dashboard
+        # present a model fitted on a different dataset as if it were current.
+        for stale in ("channel_summary.csv", "contributions.csv", "fit_metrics.json"):
+            (outdir / stale).unlink(missing_ok=True)
         from advanced_reporting.reporting.commentary import generate_descriptive_commentary
         (outdir / "commentary.md").write_text(
             generate_descriptive_commentary(weekly, creport), encoding="utf-8")

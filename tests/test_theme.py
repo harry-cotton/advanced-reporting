@@ -16,7 +16,7 @@ def test_style_fig_enforces_house_style():
     fig = theme.style_fig(_fig(), yfmt="currency")
     assert fig.layout.font.family == theme.SANS
     assert fig.layout.hovermode == "x unified"
-    assert fig.layout.title.text is None          # action titles live outside the figure
+    assert not fig.layout.title.text              # action titles live outside the figure
     assert fig.layout.yaxis.tickformat == "$,.0f"
     assert fig.layout.yaxis.gridcolor == theme.GRID
     assert fig.layout.xaxis.showgrid is False
