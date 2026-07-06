@@ -55,15 +55,32 @@ def load_campaign_goals(path=None) -> dict:
 
 
 def resolve_goal(campaign: str, goals: dict | None = None) -> str:
-    """Resolve a campaign name to a goal: explicit override -> name inference -> default."""
+    """Resolve a campaign name to a goal: explicit override -> name inference -> default.
+
+    Overrides match as whole tokens/phrases anywhere in the name (so 'nonbrand' fires
+    inside 'NonBrand_Search_US' — real campaign names are compound), checked longest
+    key first so 'nonbrand' beats 'brand'. Inference patterns match at token STARTS
+    ('retarget' fires for 'retargeting', but 'mid' no longer fires inside 'midwest'
+    and 'brand' no longer fires inside 'nonbrand')."""
+    from ..utils import norm_text, phrase_in
     goals = goals if goals is not None else load_campaign_goals()
     name = str(campaign).strip().lower()
+    tokens = norm_text(name).split()
+
     overrides = {str(k).lower(): v for k, v in (goals.get("overrides") or {}).items()}
-    if name in overrides:
+    if name in overrides:                      # exact full-name override, highest priority
         return overrides[name]
+    for key in sorted(overrides, key=len, reverse=True):
+        if phrase_in(name, key):
+            return overrides[key]
+
     for goal, patterns in (goals.get("inference") or {}).items():
-        if any(str(p).lower() in name for p in (patterns or [])):
-            return goal
+        for p in (patterns or []):
+            p = str(p).lower()
+            # short generic patterns ('mid', 'abm') must match a whole token; longer
+            # stems may prefix-match ('retarget' -> 'retargeting')
+            if any(t == p or (len(p) >= 4 and t.startswith(p)) for t in tokens):
+                return goal
     return goals.get("default_goal", "conversion")
 
 

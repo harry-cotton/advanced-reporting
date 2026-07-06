@@ -71,3 +71,37 @@ def test_narrative_respects_channel_filter():
     md = L.render_narrative(spec, _wk())
     # meta-only ROAS = 4000/1000 = 4.00x (tiktok excluded)
     assert "4.00x" in md
+
+
+# --- adversarial inputs (regressions for the substring-matching defects, 2026-07 review) ---
+
+def test_campaign_word_does_not_filter_to_meta():
+    # 'ig' (alias for meta) used to match inside 'campa-IG-n' — including the
+    # dashboard's own placeholder text — silently scoping everything to Meta
+    assert L.parse_lens("this is an awareness campaign", use_llm=False).channels is None
+    assert L.parse_lens("weekly campaign report", use_llm=False).channels is None
+    assert L.parse_lens("big picture overview", use_llm=False).channels is None
+    assert L.parse_lens("give me insights on performance", use_llm=False).channels is None
+
+
+def test_search_and_meta_substrings_do_not_leak():
+    assert L.parse_lens("research report", use_llm=False).channels is None
+    assert L.parse_lens("metadata analysis", use_llm=False).channels is None
+    # but explicit mentions still work, in either separator style
+    assert L.parse_lens("google search deep dive", use_llm=False).channels == ["google_search"]
+    assert L.parse_lens("google_search results", use_llm=False).channels == ["google_search"]
+
+
+def test_detailed_summary_is_detailed_not_executive():
+    assert L.parse_lens("give me a detailed summary", use_llm=False).tone == "detailed"
+    # boundary matching: 'brief'/'short' no longer fire inside other words
+    assert L.parse_lens("the debrief on the shortfall", use_llm=False).tone == "standard"
+
+
+def test_goal_inference_tokenized():
+    # 'brand' no longer fires inside 'nonbrand' (compound names get token matching)
+    assert M.resolve_goal("NonBrand_Search_US") == "conversion"
+    # 'mid' no longer fires inside 'midwest'; 'retargeting' resolves via override/stem
+    assert M.resolve_goal("midwest sales retargeting recap") == "conversion"
+    # stems still work at token starts
+    assert M.resolve_goal("Prospecting_Broad_Q3") == "awareness"

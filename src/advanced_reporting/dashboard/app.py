@@ -27,7 +27,21 @@ if not metrics_f.exists():
     st.warning("No processed data yet. Run `python scripts/run_pipeline.py` first.")
     st.stop()
 
-m = pd.read_csv(metrics_f, parse_dates=["date"])
+
+@st.cache_data
+def _load_metrics(path: str, mtime: float) -> pd.DataFrame:
+    return pd.read_csv(path, parse_dates=["date"])
+
+
+@st.cache_data
+def _parse_lens_cached(text: str, use_llm: bool):
+    # cached per (text, toggle): Streamlit reruns this script on EVERY widget
+    # interaction, and an uncached parse re-fired a live LLM call each time —
+    # latency on every click, plus the parse could change between reruns
+    return L.parse_lens(text, use_llm=use_llm)
+
+
+m = _load_metrics(str(metrics_f), metrics_f.stat().st_mtime)
 has_engagement = "sessions" in m.columns
 
 # --- sidebar: filters + goal lens ---
@@ -47,10 +61,17 @@ primary = M.primary_tier(goal, goals_cfg)
 
 lens_text = st.sidebar.text_input("Report lens (free text)",
                                   placeholder="e.g. this is an awareness campaign")
+use_llm = st.sidebar.toggle(
+    "Parse lens with LLM", value=False,
+    help="Off = deterministic keyword parser (no network). On = one Claude call per "
+         "unique lens text; needs ANTHROPIC_API_KEY.")
 lens_spec = None
 if lens_text.strip():
-    lens_spec = L.parse_lens(lens_text)
+    lens_spec = _parse_lens_cached(lens_text.strip(), use_llm)
     goal, primary = lens_spec.goal, lens_spec.primary_tier
+    st.sidebar.caption(f"Lens overrides the goal selector → **{goal}**"
+                       + (f", channels: {', '.join(lens_spec.channels)}"
+                          if lens_spec.channels else ""))
 
 f = m[m["channel"].isin(sel)]
 if lens_spec is not None and lens_spec.channels:

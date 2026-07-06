@@ -1,8 +1,25 @@
-"""Small shared helpers: project paths and config loading."""
+"""Small shared helpers: project paths, config loading, and token-safe text matching."""
 from __future__ import annotations
 import os
+import re
 from pathlib import Path
 import yaml
+
+
+def norm_text(s) -> str:
+    """Lowercase and collapse all non-alphanumerics to single spaces ('Tik-Tok_US' ->
+    'tik tok us'), so phrase matching is separator-agnostic."""
+    return re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
+
+
+def phrase_in(text: str, phrase) -> bool:
+    """Whole-word/phrase match: 'search' in 'paid search report' but NOT in 'research'.
+
+    Both sides are normalized, so 'google_search' matches 'google search' and vice
+    versa. This is the antidote to the raw-substring matching that made any text
+    containing 'campaign' match the alias 'ig' (campa-IG-n)."""
+    p = norm_text(phrase)
+    return bool(p) and re.search(rf"\b{re.escape(p)}\b", norm_text(text)) is not None
 
 # Canonical ad columns, kept here so the built-in mappings fallback has no import
 # dependency on the ingestion package (avoids any import cycle).

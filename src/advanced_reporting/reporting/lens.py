@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from . import metrics as M
-from ..utils import load_config, load_mappings
+from ..utils import load_config, load_mappings, phrase_in
 
 
 @dataclass
@@ -32,27 +32,40 @@ class ReportSpec:
 
 _TONE_PATTERNS = {
     "executive": ["exec", "executive", "brief", "short", "summary", "tldr", "tl;dr",
-                  "high level", "high-level", "one pager", "one-pager"],
-    "detailed": ["detail", "deep", "thorough", "comprehensive", "granular", "full breakdown"],
+                  "high level", "one pager"],
+    "detailed": ["detail", "detailed", "deep", "deep dive", "thorough", "comprehensive",
+                 "granular", "full breakdown"],
 }
 
 
 def _detect_tone(text: str) -> str:
-    t = text.lower()
-    for tone, pats in _TONE_PATTERNS.items():
-        if any(p in t for p in pats):
-            return tone
+    # whole-word/phrase matching ('brief' no longer fires inside 'debrief'), and an
+    # explicit detail request outranks a generic 'summary' — 'give me a detailed
+    # summary' used to silently produce the thinnest report
+    if any(phrase_in(text, p) for p in _TONE_PATTERNS["detailed"]):
+        return "detailed"
+    if any(phrase_in(text, p) for p in _TONE_PATTERNS["executive"]):
+        return "executive"
     return "standard"
 
 
+# Aliases that exist for COLUMN mapping but are too short or too generic to trust in
+# free text: 'ig' fired inside 'campa-ig-n' — any text mentioning "campaign" (including
+# the dashboard's own placeholder) silently filtered everything to Meta; 'search' fired
+# inside search-adjacent phrasing ('research' is handled by word boundaries, but a bare
+# 'search for wins' should not scope the report to google_search either).
+_LENS_ALIAS_SKIP = {"search", "video", "shopping", "performance", "display", "social"}
+
+
 def _detect_channels(text: str, known, aliases) -> list | None:
-    t = text.lower()
     found = set()
     for ch in known:
-        if ch in t or ch.replace("_", " ") in t:
+        if phrase_in(text, ch):
             found.add(ch)
     for alias, canon in (aliases or {}).items():
-        if alias in t and canon in known:
+        if len(alias) < 3 or alias in _LENS_ALIAS_SKIP:
+            continue
+        if canon in known and phrase_in(text, alias):
             found.add(canon)
     return sorted(found) or None
 
