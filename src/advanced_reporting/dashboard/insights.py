@@ -73,6 +73,68 @@ def _recent_vs_prior(series: pd.Series, window: int = 4) -> float:
     return (recent - prior) / prior if prior else float("nan")
 
 
+# ---------------------------------------------------------------- headline tile row
+def headline_tiles(weekly: pd.DataFrame, kpi_label: str = "key events") -> list[dict]:
+    """Executive KPI tiles with 4-week deltas (design feedback: Grow-style top row).
+
+    Each tile: ``{"label", "value", "delta", "delta_color", "help"}`` — ``delta`` is a
+    ready-formatted "±N% vs prior 4 wks" string (None when there's no prior period);
+    ``delta_color`` is "inverse" for costs (down = good).
+    """
+    measured = _has_measured(weekly)
+    col = "key_events" if measured else "conversions"
+    out_label = kpi_label if measured else "claimed conversions"
+    paid = weekly[weekly["channel"].isin(_paid_channels(weekly))]
+
+    def _delta(series: pd.Series) -> str | None:
+        pct = _recent_vs_prior(series)
+        return None if pd.isna(pct) else f"{pct * 100:+.0f}% vs prior 4 wks"
+
+    spend_w = paid.groupby("date")["spend"].sum().sort_index()
+    out_w = paid.groupby("date")[col].sum(min_count=1).sort_index()
+    total_out = float(out_w.sum())
+
+    tiles = [
+        {"label": "Spend", "value": _money(spend_w.sum()), "delta": _delta(spend_w),
+         "delta_color": "off", "help": "Paid media spend over the reporting period."},
+        {"label": out_label.capitalize(), "value": f"{total_out:,.0f}",
+         "delta": _delta(out_w), "delta_color": "normal",
+         "help": ("Analytics-measured (GA4) outcomes on paid campaigns." if measured
+                  else "Platform-claimed conversions — no analytics series yet.")},
+    ]
+    if total_out > 0:
+        cost_w = (spend_w / out_w).replace([float("inf")], float("nan"))
+        tiles.append({
+            "label": f"Cost / {_singular(out_label)}",
+            "value": _money(float(spend_w.sum()) / total_out),
+            "delta": _delta(cost_w.dropna()), "delta_color": "inverse",
+            "help": "Total paid spend over total outcomes; lower is better."})
+    if measured and "conversions" in weekly.columns:
+        claimed = float(paid["conversions"].sum())
+        if claimed > 0 and total_out > 0:
+            tiles.append({
+                "label": "Claim ratio", "value": f"{claimed / total_out:.1f}x",
+                "delta": None, "delta_color": "off",
+                "help": ("Platform-claimed conversions vs analytics-measured "
+                         f"{kpi_label}. Platforms self-attribute; a gap is expected.")})
+    if "sessions" in weekly.columns and weekly["sessions"].notna().any():
+        sess_w = weekly.groupby("date")["sessions"].sum(min_count=1).sort_index()
+        tiles.append({
+            "label": "Sessions", "value": f"{float(sess_w.sum()):,.0f}",
+            "delta": _delta(sess_w), "delta_color": "normal",
+            "help": "Site sessions (all traffic, incl. organic and direct)."})
+    return tiles
+
+
+def spend_mix(weekly: pd.DataFrame) -> pd.DataFrame:
+    """Paid spend share by channel (for the compact mix donut)."""
+    paid = weekly[weekly["channel"].isin(_paid_channels(weekly))]
+    per = paid.groupby("channel")["spend"].sum().sort_values(ascending=False)
+    out = per.reset_index()
+    out["share"] = out["spend"] / out["spend"].sum()
+    return out
+
+
 # ---------------------------------------------------------------- block 1: KPI trend
 def kpi_trend_insight(weekly: pd.DataFrame, kpi_label: str = "key events") -> dict | None:
     """Headline outcome + trend: measured (GA4) when available, else claimed w/ label."""

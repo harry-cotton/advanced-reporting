@@ -49,6 +49,14 @@ n_paid = len(insights._paid_channels(weekly))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
            "below is computed from the weekly tables — no generated commentary.")
 
+# --- executive tile row ------------------------------------------------------------
+tiles = insights.headline_tiles(weekly, kpi_label)
+cols = st.columns(len(tiles))
+for col, t in zip(cols, tiles):
+    col.metric(t["label"], t["value"], delta=t["delta"],
+               delta_color=t["delta_color"], help=t["help"])
+st.divider()
+
 
 def _narrow():
     """Editorial measure: keep prose and charts on a readable column width."""
@@ -114,24 +122,39 @@ if b:
         theme.prose(b["narrative"])
     st.divider()
 
-# --- block 4: pacing ---------------------------------------------------------------
+# --- block 4: pacing + where the money goes -----------------------------------------
 b = insights.pacing_insight(weekly, budget_cfg)
 if b:
     with _narrow():
         theme.action_title(b["title"])
-        cum = b["cumulative"]
-        fig = go.Figure()
-        fig.add_scatter(x=cum.index, y=cum.values, name="Cumulative spend",
-                        mode="lines", line=dict(color=theme.ACCENT, width=2.5),
-                        fill="tozeroy", fillcolor="rgba(31,78,121,0.08)")
-        if b["budget"]:
-            plan_x = [cum.index.min(),
-                      cum.index.min() + pd.Timedelta(weeks=b["budget"]["flight_weeks"])]
-            fig.add_scatter(x=plan_x, y=[0, b["budget"]["total"]], name="Plan",
-                            mode="lines",
-                            line=dict(color=theme.INK_SOFT, width=1.5, dash="dot"))
-        theme.plotly_chart(fig, yfmt="currency", height=320,
-                           legend=bool(b["budget"]))
+        left, right = st.columns([5, 3])
+        with left:
+            cum = b["cumulative"]
+            fig = go.Figure()
+            fig.add_scatter(x=cum.index, y=cum.values, name="Cumulative spend",
+                            mode="lines", line=dict(color=theme.ACCENT, width=2.5),
+                            fill="tozeroy", fillcolor="rgba(31,78,121,0.08)")
+            if b["budget"]:
+                plan_x = [cum.index.min(), cum.index.min()
+                          + pd.Timedelta(weeks=b["budget"]["flight_weeks"])]
+                fig.add_scatter(x=plan_x, y=[0, b["budget"]["total"]], name="Plan",
+                                mode="lines",
+                                line=dict(color=theme.INK_SOFT, width=1.5, dash="dot"))
+            theme.plotly_chart(fig, yfmt="currency", height=320,
+                               legend=bool(b["budget"]))
+        with right:
+            mix = insights.spend_mix(weekly)
+            fig = go.Figure(go.Pie(
+                labels=[theme.channel_label(c) for c in mix["channel"]],
+                values=mix["spend"], hole=0.62, sort=False,
+                marker=dict(colors=[theme.channel_color(c, i)
+                                    for i, c in enumerate(mix["channel"])]),
+                textinfo="percent", textfont=dict(size=12)))
+            fig.update_layout(
+                annotations=[dict(text="Spend<br>mix", showarrow=False,
+                                  font=dict(family=theme.SANS, size=14,
+                                            color=theme.INK_SOFT))])
+            theme.plotly_chart(fig, height=320, legend=True)
         theme.prose(b["narrative"])
 
 # --- external-context aside (DEFERRED: hidden until curated notes exist) -----------
