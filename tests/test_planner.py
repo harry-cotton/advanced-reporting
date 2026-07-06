@@ -235,3 +235,93 @@ def test_historical_performance_ratios():
 def test_demo_grounding_is_flagged_not_silent():
     with pytest.raises(NotImplementedError):
         evidence.historical_performance_by_demo()
+
+
+# --- 7. Step-5 allocator correctness (2026-07 review) ------------------------------------
+
+def _weekly_curves():
+    """Curves in WEEKLY spend units (like the real MMM emits): meta saturates hard at
+    $800/wk, tiktok is steep and linear, linkedin is nearly flat."""
+    s = np.linspace(0, 2_000, 200)
+    return {
+        "meta": {"spend": s, "response": 5.0 * np.minimum(s, 800.0), "mean_spend": 600.0},
+        "tiktok": {"spend": s, "response": 2.0 * s, "mean_spend": 600.0},
+        "linkedin": {"spend": s, "response": 0.1 * s, "mean_spend": 600.0},
+    }
+
+
+def test_allocator_evaluates_weekly_curves_at_weekly_spend(rails):
+    # total $30k over 10 weeks = $3k/week across meta+tiktok+linkedin. Before the fix,
+    # marginals were evaluated at TOTAL budget (way past the curve grid), every channel
+    # clamped at its tail slope, and the split degenerated to bang-bang fill-to-cap.
+    g = _goals("awareness", 30_000.0)
+    g["channels"] = ["meta", "tiktok", "linkedin"]
+    g["n_weeks"] = 10
+    plan = plan_campaign(g, load_rails(), mmm_result=None, use_llm=False)
+    # swap in known curves and re-allocate to isolate the allocator's behavior
+    allocate(plan, load_rails(), curves=_weekly_curves(), n_weeks=10.0)
+    budgets = {pf.channel: pf.budget for st in plan.stages for pf in st.platforms}
+    assert sum(budgets.values()) == pytest.approx(30_000.0, rel=1e-3)
+    # tiktok (steep, unsaturated) beats meta (saturates at $800/wk -> ~$8k total),
+    # which beats linkedin (near-zero marginal)
+    assert budgets["tiktok"] > budgets["meta"] > budgets["linkedin"]
+    # THE regression: meta must stop near its saturation point x flight weeks,
+    # not be tail-clamp filled to the 50% cap ($15k)
+    assert budgets["meta"] == pytest.approx(8_000.0, abs=1_500.0)
+
+
+def test_partial_curve_coverage_falls_back_to_rules(rails):
+    g = _goals("awareness", 30_000.0)
+    g["channels"] = ["meta", "tiktok", "google_search"]   # google_search has no curve
+    plan = plan_campaign(g, load_rails(), mmm_result=None, use_llm=False)
+    curves = {k: v for k, v in _weekly_curves().items() if k != "linkedin"}
+    allocate(plan, load_rails(), curves=curves, n_weeks=10.0)
+    note = " ".join(pf.rec.rationale for st in plan.stages for pf in st.platforms if pf.rec)
+    assert "cover only some" in note                       # rules fallback, honestly labeled
+
+
+def test_infeasible_budget_fails_loud_and_early(rails):
+    # 1 channel x max 50% = $50k < $100k total: used to crash deep in enforce() with
+    # a misleading "budgets sum to 50,000, not total 100,000"
+    g = _goals("conversion", 100_000.0)
+    g["channels"] = ["meta"]
+    with pytest.raises(PlannerValidationError, match="max_pct_per_channel"):
+        plan_campaign(g, load_rails(), use_llm=False)
+
+
+def test_goal_typo_raises_instead_of_silent_conversion_plan(rails):
+    # 'awarness' used to silently produce a generic CONVERT plan
+    with pytest.raises(ValueError, match="valid goals"):
+        plan_campaign({"goal": "awarness", "total_budget": 50_000.0}, rails, use_llm=False)
+
+
+def test_zero_budget_raises_early(rails):
+    with pytest.raises(ValueError, match="total_budget"):
+        plan_campaign({"goal": "awareness", "total_budget": 0.0}, rails, use_llm=False)
+
+
+def test_flight_weeks_from_dates_lands_in_allocation_note(rails):
+    g = _goals("awareness", 50_000.0)
+    g["flight_start"], g["flight_end"] = "2026-08-03", "2026-09-28"   # 8 weeks
+    plan = plan_campaign(g, rails, mmm_result=_mmm_result(), use_llm=False)
+    note = " ".join(pf.rec.rationale for st in plan.stages for pf in st.platforms if pf.rec)
+    assert "flight 8 wk" in note
+    assert "ASSUMED" not in note
+    # and the default path says the assumption out loud
+    plan2 = plan_campaign(_goals("awareness", 50_000.0), rails,
+                          mmm_result=_mmm_result(), use_llm=False)
+    note2 = " ".join(pf.rec.rationale for st in plan2.stages for pf in st.platforms if pf.rec)
+    assert "ASSUMED" in note2
+
+
+def test_vocabulary_enforced_outside_llm_path(rails):
+    # a hand-built plan with an invented audience used to sail through check()
+    plan = plan_campaign(_goals("awareness", 90_000.0), rails, use_llm=False)
+    for st in plan.stages:
+        for pf in st.platforms:
+            for au in pf.audiences:
+                au.audience_type, au.audience_detail = "HACK", "INVENTED"
+    issues = check(plan, rails)
+    assert any("audience library" in i for i in issues)
+    with pytest.raises(PlannerValidationError):   # enforce drops them -> plan empties -> loud
+        enforce(plan, rails)

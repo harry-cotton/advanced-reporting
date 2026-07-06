@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from .rails import channel_bounds
-from .schema import CampaignPlan, Recommendation
+from .schema import CampaignPlan, PlannerValidationError, Recommendation
 
 _CURVE_CONF = 0.8        # confidence when the split is MMM-curve grounded
 _RULES_CONF = 0.3        # confidence for the no-MMM rules fallback
@@ -63,9 +63,8 @@ def _waterfill(channels, total, lo, hi, curves) -> list[float]:
         alloc[best_i] += add
         remaining -= add
 
-    if remaining > 1e-6:                         # all hit max: spread leftover (validate clips)
-        for i in range(n):
-            alloc[i] += remaining / n
+    # the feasibility precheck in allocate() guarantees n*hi >= total, so any residual
+    # here is step-granularity dust — validate's reconcile tolerance absorbs it
     return alloc
 
 
@@ -116,8 +115,15 @@ def _push_down(plan: CampaignPlan):
 
 
 def allocate(plan: CampaignPlan, rails: dict, *, curves: dict | None = None,
-             priors: dict | None = None) -> CampaignPlan:
-    """Set ``budget`` on every node of ``plan`` deterministically. Returns the same plan."""
+             priors: dict | None = None, n_weeks: float = 1.0,
+             n_weeks_assumed: bool = False) -> CampaignPlan:
+    """Set ``budget`` on every node of ``plan`` deterministically. Returns the same plan.
+
+    ``n_weeks`` is the flight length: MMM response curves are denominated in WEEKLY
+    spend, so marginal returns are evaluated at ``budget / n_weeks`` (evaluating the
+    total flight budget on a weekly curve clamps every channel at the curve tail and
+    degenerates water-filling into bang-bang fill-to-cap — the 2026-07 review defect).
+    """
     nodes = _platform_nodes(plan)
     if not nodes:
         return plan
@@ -125,17 +131,44 @@ def allocate(plan: CampaignPlan, rails: dict, *, curves: dict | None = None,
     total = float(plan.total_budget)
     lo, hi = channel_bounds(rails, total)
 
-    have_curves = bool(curves) and any(ch in curves for ch in channels)
+    # feasibility precheck — fail HERE with an actionable message instead of deep in
+    # enforce() with a misleading "budgets sum to X, not total Y"
+    k = len(set(channels))
+    max_pct = float(rails.get("budget_rules", {}).get("max_pct_per_channel", 1.0))
+    min_pct = float(rails.get("budget_rules", {}).get("min_pct_per_channel", 0.0))
+    if k * hi < total * (1 - 1e-9):
+        raise PlannerValidationError(
+            f"budget infeasible: {k} channel(s) x max {max_pct:.0%} per channel = "
+            f"${k * hi:,.0f} < total ${total:,.0f} — add channels or raise "
+            "budget_rules.max_pct_per_channel")
+    if k * lo > total * (1 + 1e-9):
+        raise PlannerValidationError(
+            f"budget infeasible: {k} channel(s) x min {min_pct:.0%} per channel = "
+            f"${k * lo:,.0f} > total ${total:,.0f} — remove channels or lower "
+            "budget_rules.min_pct_per_channel")
+
+    wk = max(float(n_weeks), 1e-9)
+    # curve-grounded allocation requires EVERY channel to have a curve — with partial
+    # coverage, curve-less channels sat at a hardwired zero marginal and never received
+    # a cent above the floor until every curve channel capped out
+    have_curves = bool(curves) and all(ch in curves for ch in channels)
     if have_curves:
-        alloc = _waterfill(channels, total, lo, hi, curves)
+        alloc_wk = _waterfill(channels, total / wk, lo / wk, hi / wk, curves)
+        alloc = [a * wk for a in alloc_wk]
         source, conf, ref = "mmm_response_curves", _CURVE_CONF, "response_curves"
-        note = "Split optimized against MMM response curves (marginal return)."
+        note = (f"Split optimized against MMM response curves (marginal return, weekly "
+                f"basis, flight {n_weeks:g} wk"
+                + (", flight length ASSUMED — pass n_weeks or flight dates"
+                   if n_weeks_assumed else "") + ").")
     else:
         strategy = rails.get("budget_rules", {}).get("no_mmm_strategy", "even")
         alloc = _rules_split(channels, total, lo, hi, strategy, priors)
         source, conf, ref = f"rules:{strategy}", _RULES_CONF, "historical:channel"
-        note = (f"No fitted MMM available — {strategy} rules split, low confidence. "
-                "Fit an MMM for incrementality-grounded allocation.")
+        partial = bool(curves) and any(ch in curves for ch in channels)
+        note = (("Response curves cover only some plan channels — " if partial
+                 else "No fitted MMM available — ")
+                + f"{strategy} rules split, low confidence. Fit an MMM covering every "
+                "plan channel for incrementality-grounded allocation.")
 
     for (st, pf), budget in zip(nodes, alloc):
         pf.budget = float(budget)

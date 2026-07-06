@@ -12,11 +12,19 @@ from __future__ import annotations
 
 from .allocator import _clip_renormalize, _push_down
 from .rails import allowed_channels, channel_bounds, reconcile_tolerance
-from .schema import CampaignPlan
+from .schema import CampaignPlan, PlannerValidationError  # noqa: F401 — re-exported
 
 
-class PlannerValidationError(ValueError):
-    """Raised when a plan violates the rails in a way ``enforce`` cannot repair."""
+def _libraries(rails: dict) -> tuple[set, set]:
+    """The rails vocabulary as membership sets: audience (type, detail) pairs and
+    creative (creative, format, size) triples, across all goals/objectives."""
+    lib_aud = {(a.get("audience_type"), a.get("audience_detail"))
+               for entries in (rails.get("audience_library") or {}).values()
+               for a in (entries or [])}
+    lib_cr = {(c.get("creative"), c.get("format"), c.get("size"))
+              for entries in (rails.get("creatives") or {}).values()
+              for c in (entries or [])}
+    return lib_aud, lib_cr
 
 
 def _channel_totals(plan: CampaignPlan) -> dict:
@@ -68,6 +76,21 @@ def check(plan: CampaignPlan, rails: dict) -> list[str]:
     if len(channels) > int(caps.get("max_channels", 1_000)):
         issues.append(f"{len(channels)} channels exceeds cap {caps.get('max_channels')}")
 
+    # vocabulary: audiences/creatives must come from the rails libraries. The LLM clip
+    # (_clip_selection) guards only the LLM path — a hand-built plan with invented
+    # entries used to sail through check() and into the naming generator.
+    lib_aud, lib_cr = _libraries(rails)
+    for st in plan.stages:
+        for pf in st.platforms:
+            for au in pf.audiences:
+                if lib_aud and (au.audience_type, au.audience_detail) not in lib_aud:
+                    issues.append(f"audience ('{au.audience_type}', '{au.audience_detail}') "
+                                  "is not in the rails audience library")
+                for cr in au.creatives:
+                    if lib_cr and (cr.creative, cr.format, cr.size) not in lib_cr:
+                        issues.append(f"creative ('{cr.creative}', '{cr.format}', "
+                                      f"'{cr.size}') is not in the rails creative library")
+
     # completeness of leaves
     for st, pf, au, cr in creatives:
         if not (cr.format and cr.size):
@@ -98,7 +121,9 @@ def enforce(plan: CampaignPlan, rails: dict) -> CampaignPlan:
     max_cr = int(caps.get("max_creatives_per_audience", 1_000))
     max_ch = int(caps.get("max_channels", 1_000))
 
-    # 1. structural repairs: drop disallowed channels; trim caps; strip blocked placements
+    # 1. structural repairs: drop disallowed channels and out-of-library audiences/
+    #    creatives; trim caps; strip blocked placements
+    lib_aud, lib_cr = _libraries(rails)
     seen_channels: list[str] = []
     for st in plan.stages:
         kept_platforms = []
@@ -110,9 +135,14 @@ def enforce(plan: CampaignPlan, rails: dict) -> CampaignPlan:
                     continue                       # over the channel cap -> drop
                 seen_channels.append(pf.channel)
             pf.audiences = [au for au in pf.audiences
-                            if not (au.placement and au.placement in blocked)][:max_aud]
+                            if not (au.placement and au.placement in blocked)
+                            and (not lib_aud
+                                 or (au.audience_type, au.audience_detail) in lib_aud)
+                            ][:max_aud]
             for au in pf.audiences:
-                au.creatives = au.creatives[:max_cr]
+                au.creatives = [cr for cr in au.creatives
+                                if not lib_cr
+                                or (cr.creative, cr.format, cr.size) in lib_cr][:max_cr]
             kept_platforms.append(pf)
         st.platforms = kept_platforms
     plan.stages = [st for st in plan.stages if st.platforms]

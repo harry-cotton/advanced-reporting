@@ -44,8 +44,32 @@ def _use_llm(use_llm) -> bool:
 
 # --- goals normalization ---------------------------------------------------------------
 
+_DEFAULT_FLIGHT_WEEKS = 4.0
+
+
+def _flight_weeks(g: dict) -> tuple[float, bool]:
+    """Flight length in weeks: explicit ``n_weeks`` > flight dates > assumed default.
+
+    The allocator evaluates weekly response curves, so it needs a real flight length;
+    when neither is given we assume 4 weeks and say so in the allocation note."""
+    if g.get("n_weeks"):
+        return max(float(g["n_weeks"]), 1.0), False
+    try:
+        from datetime import date
+        start = date.fromisoformat(str(g.get("flight_start", "")))
+        end = date.fromisoformat(str(g.get("flight_end", "")))
+        days = (end - start).days
+        if days > 0:
+            return max(days / 7.0, 1.0), False
+    except (ValueError, TypeError):
+        pass
+    return _DEFAULT_FLIGHT_WEEKS, True
+
+
 def _normalize_goals(goals: dict, rails: dict) -> dict:
-    """Fill campaign-meta defaults from the rails and resolve the goal if not given."""
+    """Fill campaign-meta defaults from the rails, resolve + VALIDATE the goal, and
+    derive the flight length. Loud-fail on a bad budget or a typo'd goal — a typo used
+    to silently degrade into a generic conversion plan."""
     if "total_budget" not in goals:
         raise ValueError("goals must include 'total_budget'")
     g = dict(goals)
@@ -59,7 +83,16 @@ def _normalize_goals(goals: dict, rails: dict) -> dict:
     g.setdefault("version", camp.get("default_version", "V1"))
     if "goal" not in g or not g["goal"]:
         g["goal"] = M.resolve_goal(g["campaign"], M.load_campaign_goals())
+
+    valid_goals = set(rails.get("funnel", {})) | set(rails.get("audience_library", {}))
+    if valid_goals and g["goal"] not in valid_goals:
+        raise ValueError(f"unknown goal '{g['goal']}' — valid goals: "
+                         + ", ".join(sorted(valid_goals)))
+
     g["total_budget"] = float(g["total_budget"])
+    if g["total_budget"] <= 0:
+        raise ValueError(f"total_budget must be > 0 (got {g['total_budget']:,.0f})")
+    g["n_weeks"], g["_n_weeks_assumed"] = _flight_weeks(g)
     return g
 
 
@@ -304,5 +337,5 @@ def plan_campaign(goals: dict, rails: dict | None = None, *, history=None,
     allocator.allocate(
         plan, rails,
         curves=(mmm_result.response_curves if mmm_result is not None else None),
-        priors=priors)
+        priors=priors, n_weeks=g["n_weeks"], n_weeks_assumed=g["_n_weeks_assumed"])
     return validate.enforce(plan, rails)

@@ -17,6 +17,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 
+
+class PlannerValidationError(ValueError):
+    """Raised when a plan violates the rails in a way ``enforce`` cannot repair,
+    or when the goals/rails combination is infeasible before allocation."""
+
 # The naming generator's Plan-sheet columns, verbatim and in order. Kept in sync with
 # ``naming/naming_generator.py:PLAN_COLS`` by ``tests/test_planner.py`` (round-trip).
 PLAN_COLS = ["market", "channel", "objective", "audience_type", "audience_detail",

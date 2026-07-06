@@ -40,7 +40,7 @@ def _fit_mmm(cfg):
 
 
 def run(goal, budget, *, market=None, campaign=None, primary_kpi="conversions",
-        use_llm=None, write_names=True):
+        use_llm=None, write_names=True, weeks=None):
     cfg = load_config()
     outdir = ROOT / cfg["reporting"]["output_dir"]
     outdir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +54,7 @@ def run(goal, budget, *, market=None, campaign=None, primary_kpi="conversions",
               "for incrementality-grounded allocation)")
 
     goals = {
-        "goal": goal, "total_budget": float(budget),
+        "goal": goal, "total_budget": float(budget), "n_weeks": weeks,
         "market": market or rails["campaign"].get("default_market", "US"),
         "campaign": campaign or f"{goal}_campaign", "primary_kpi": primary_kpi,
     }
@@ -95,9 +95,11 @@ if __name__ == "__main__":
     ap.add_argument("--market", default=None)
     ap.add_argument("--campaign", default=None)
     ap.add_argument("--kpi", default="conversions", help="primary KPI")
+    ap.add_argument("--weeks", type=float, default=None,
+                    help="flight length in weeks (response curves are weekly; assumed 4 if omitted)")
     ap.add_argument("--use-llm", action="store_true",
                     help="force the guarded LLM path (default: on iff ANTHROPIC_API_KEY set)")
     ap.add_argument("--no-names", action="store_true", help="skip running the naming generator")
     a = ap.parse_args()
     run(a.goal, a.budget, market=a.market, campaign=a.campaign, primary_kpi=a.kpi,
-        use_llm=(True if a.use_llm else None), write_names=not a.no_names)
+        use_llm=(True if a.use_llm else None), write_names=not a.no_names, weeks=a.weeks)
