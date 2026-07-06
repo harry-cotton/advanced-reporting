@@ -66,8 +66,16 @@ store the pipeline reads from, so history grows over time. A second, forward pat
    campaign-goal tagging from `config/campaign_goals.yaml`, plus funnel + value-format helpers);
    `lens.py` (**free-text report lens**: NL intent → `ReportSpec` → deterministic metrics + a
    tailored narrative; deterministic keyword parser is the default, guarded LLM path optional).
-5. **`dashboard/app.py`** — Streamlit dashboard: the goal-aware **KPI pyramid** + goal-lens
-   selector + funnel drop-off + a free-text lens box, alongside standard non-MMM metrics.
+5. **`dashboard/`** — Streamlit multipage app. `app.py` is the editorial **narrative
+   Overview** (executive tile row + 4 deterministic insight blocks from `insights.py`;
+   serif action titles; the claims-vs-measured honesty visual). Sub-pages: `1_Channels`
+   (trends, efficiency scatter, nested channel→campaign→audience→creative table),
+   `2_Audiences` (cost-per-claimed rankings — everything below campaign grain is labeled
+   platform-claimed; unparsed-name callout), `3_Data_Quality`, `4_Explore` (KPI pyramid +
+   goal lens + free-text lens). `theme.py` holds the design tokens + the one
+   `plotly_chart()` house-style helper every chart goes through; `drilldown.py` the
+   pure-pandas aggregations (its `ad_group_table` structurally carries NO key_events —
+   GA4 measures at campaign grain only).
 6. **`planner/`** — turns *goals + rails* into a validated **`CampaignPlan`** that feeds the
    naming generator (Plan rows → names + UTMs). Same spine as `lens.py`: deterministic default
    + a **guarded LLM path** (one structured call — model set in rails `llm.model`, Sonnet-class default — when a key is
