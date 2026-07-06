@@ -21,8 +21,8 @@ import pandas as pd
 # Boundary values of BaselineMMM's hyperparameter searches (baseline.py). A selected value
 # sitting ON a search boundary means the search wanted to go further — a red flag worth
 # surfacing even when recovery looks acceptable.
-DECAY_GRID_MIN, DECAY_GRID_MAX = 0.0, 0.7
-RIDGE_ALPHA_GRID_MIN = 0.5
+DECAY_GRID_MIN, DECAY_GRID_MAX = 0.0, 0.8
+RIDGE_ALPHA_GRID_MIN = 0.05
 
 # Default pass thresholds: every channel's contribution within this factor of truth, and
 # the channel *ranking* broadly right. Deliberately loose — this gate catches gross

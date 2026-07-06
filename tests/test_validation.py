@@ -1,9 +1,9 @@
 """Tests for the ground-truth recovery gate (mmm/validation.py).
 
 The last test is the gate itself: fit the baseline engine on the full synthetic DGP and
-grade it against the known truth. It is marked xfail(strict=True) because the current
-baseline misattributes badly (documented in the 2026-07 architecture review); when the
-engine is fixed the test will XPASS and the suite will demand the marker be removed.
+grade it against the known truth. It shipped as xfail(strict=True) while the engine
+misattributed (2026-07 review); the Step-2 selection fixes made it pass and the marker
+was removed — it is now a hard regression gate on attribution quality.
 """
 from __future__ import annotations
 
@@ -45,11 +45,11 @@ def test_perfect_recovery_passes():
 
 
 def test_inverted_attribution_fails_with_negative_rank_corr():
-    # Estimates in reverse order of truth, and 'a' off by 20x.
+    # Estimates in reverse order of truth, and 'a' off by 20x; decays on the grid max.
     s = _summary([
-        ("a", 1e6, 0.2e6, 0.05, 0.2, 0.0, 0.5e6, 0.0, 0.5, 0.7, 5000.0),
-        ("b", 1e6, 2.0e6, 0.45, 2.0, 1e6, 3e6, 1.0, 3.0, 0.7, 5000.0),
-        ("c", 1e6, 4.0e6, 0.50, 4.0, 3e6, 5e6, 3.0, 5.0, 0.7, 5000.0),
+        ("a", 1e6, 0.2e6, 0.05, 0.2, 0.0, 0.5e6, 0.0, 0.5, 0.8, 5000.0),
+        ("b", 1e6, 2.0e6, 0.45, 2.0, 1e6, 3e6, 1.0, 3.0, 0.8, 5000.0),
+        ("c", 1e6, 4.0e6, 0.50, 4.0, 3e6, 5e6, 3.0, 5.0, 0.8, 5000.0),
     ])
     rep = recovery_report(s, TRUTH)
     assert not rep["passed"]
@@ -60,7 +60,7 @@ def test_inverted_attribution_fails_with_negative_rank_corr():
 
 def test_boundary_warnings_include_ridge_alpha_and_missing_channels():
     s = _summary([("a", 1e6, 4e6, 1.0, 4.0, 3e6, 5e6, 3.0, 5.0, 0.4, 5000.0)])
-    rep = recovery_report(s, TRUTH, fit_metrics={"ridge_alpha": 0.5})
+    rep = recovery_report(s, TRUTH, fit_metrics={"ridge_alpha": 0.05})
     assert any("ridge alpha" in w for w in rep["warnings"])
     assert any("b, c" in w for w in rep["warnings"])  # channels missing from the fit
 
@@ -95,13 +95,12 @@ def test_validate_run_is_noop_without_answer_key(tmp_path):
     assert not (tmp_path / "validation.md").exists()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect (2026-07 review): the baseline engine misattributes on the full "
-           "DGP — contaminated hyperparameter selection + decay search saturating at the "
-           "grid boundary. When the engine is fixed this will XPASS: remove the marker.")
 def test_baseline_recovers_full_dgp_ground_truth():
-    """THE gate: fit on the real synthetic DGP, grade against the answer key."""
+    """THE gate: fit on the real synthetic DGP, grade against the answer key.
+
+    Failed until 2026-07 (inverted attribution, rank corr -0.60, meta at 0.05x truth);
+    fixed by train-only transform selection against a partial residual, coordinate
+    refinement by rolling-origin CV, and a spend-scaled partial-pooling ROI penalty."""
     from advanced_reporting.ingestion.synthetic import build_kpi_frame, simulate_weekly
     from advanced_reporting.mmm.baseline import BaselineMMM
 

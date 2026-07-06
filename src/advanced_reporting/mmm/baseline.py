@@ -30,8 +30,13 @@ def _mape(y, yhat):
 class BaselineMMM(BaseMMM):
     name = "baseline"
 
+    DECAY_GRID = tuple(np.round(np.arange(0.0, 0.85, 0.1), 2))   # 0.0 .. 0.8
+    HALF_QUANTILES = (0.25, 0.50, 0.75)
+    SLOPE_GRID = (0.8, 1.0, 1.2, 1.5)
+    CV_FOLDS = 5
+
     def __init__(self, adstock_max_lag: int = 8, train_frac: float = 0.85,
-                 ridge_alphas=(0.5, 1.0, 3.0, 10.0, 30.0, 75.0),
+                 ridge_alphas=(0.05, 0.5, 1.0, 3.0, 10.0, 30.0, 75.0, 200.0, 500.0),
                  n_boot: int = 200, block: int = 8, seed: int = 0):
         self.adstock_max_lag = adstock_max_lag
         self.train_frac = train_frac
@@ -40,7 +45,12 @@ class BaselineMMM(BaseMMM):
         self.block = block
         self.rng = np.random.default_rng(seed)
 
-    def _features(self, df, channel_cols, control_cols, target):
+    def _features(self, df, channel_cols, control_cols, target, n_train):
+        """Build the design. All transform hyperparameters are selected on TRAIN weeks
+        only, and against a partial residual (y minus a train-fit of the non-media
+        block) rather than raw y — raw y is dominated by smooth trend/seasonality, which
+        systematically rewards maximum adstock smoothing (the old behavior: every
+        channel's decay saturated at the grid max)."""
         n = len(df)
         t = np.arange(n)
         y = df[target].to_numpy(float)
@@ -52,35 +62,87 @@ class BaselineMMM(BaseMMM):
         for c in control_cols:
             if c in df.columns:
                 nonmedia[c] = df[c].to_numpy(float)
+
+        # partial residual: OLS of y on the non-media block, fit on train rows only
+        NM = np.column_stack(list(nonmedia.values()))
+        beta = np.linalg.lstsq(NM[:n_train], y[:n_train], rcond=None)[0]
+        resid = y - NM @ beta
+
         media, params = {}, {}
         for ch in channel_cols:
             spend = df[ch].to_numpy(float)
-            best = None
-            for decay in np.round(np.arange(0.0, 0.75, 0.1), 2):
+            best = None   # (|corr|, decay, half, slope, transformed-full-series)
+            for decay in self.DECAY_GRID:
                 ad = geometric_adstock(spend, decay, self.adstock_max_lag)
-                if ad.std() == 0:
+                pos_tr = ad[:n_train][ad[:n_train] > 0]
+                if ad[:n_train].std() == 0 or not len(pos_tr):
                     continue
-                r = abs(np.corrcoef(ad, y)[0, 1])
-                if best is None or r > best[0]:
-                    best = (r, decay, ad)
-            decay = best[1] if best else 0.3
-            ad = best[2] if best else geometric_adstock(spend, decay, self.adstock_max_lag)
-            pos = ad[ad > 0]
-            half = float(np.median(pos)) if len(pos) else 1.0
-            media[ch] = hill_saturation(ad, half, 1.0)
-            params[ch] = dict(decay=float(decay), half_sat=half, slope=1.0,
+                for q in self.HALF_QUANTILES:
+                    half = float(np.quantile(pos_tr, q))
+                    if half <= 0:
+                        continue
+                    for slope in self.SLOPE_GRID:
+                        m = hill_saturation(ad, half, slope)
+                        if m[:n_train].std() == 0:
+                            continue
+                        r = abs(np.corrcoef(m[:n_train], resid[:n_train])[0, 1])
+                        if best is None or r > best[0]:
+                            best = (r, float(decay), half, slope, m)
+            if best is None:   # degenerate spend series: fall back to a mild default
+                decay, half, slope = 0.3, 1.0, 1.0
+                m = hill_saturation(
+                    geometric_adstock(spend, decay, self.adstock_max_lag), half, slope)
+            else:
+                _, decay, half, slope, m = best
+            media[ch] = m
+            params[ch] = dict(decay=decay, half_sat=half, slope=slope,
                               mean_spend=float(spend.mean()), max_spend=float(spend.max()))
         return nonmedia, media, params, y
 
     @staticmethod
+    def _roi_scale(M, spends):
+        """Column scales such that each scaled media column sums to the channel's total
+        spend — the fitted coefficient then IS the channel's ROI, and the ridge penalty
+        shrinks ROI comparably across channels. (Unit-std scaling made a tiny channel's
+        coefficient as cheap as a huge one's, letting small channels absorb unrelated
+        variance; this is the poor man's version of a Bayesian ROI prior.)"""
+        col = M.sum(axis=0)
+        scale = np.where((col > 0) & (spends > 0), col / np.maximum(spends, 1e-9), 1.0)
+        return np.where(scale > 0, scale, 1.0)
+
+    def _cv_fold_errs(self, NM, Ms, y, alpha, n_tr):
+        """Per-fold rolling-origin CV errors within train: expanding-window fits, each
+        validated on the next consecutive chunk of the last ~30% of train. Selection
+        never sees the terminal test block."""
+        n_first = int(n_tr * 0.7)
+        bounds = np.linspace(n_first, n_tr, self.CV_FOLDS + 1).astype(int)
+        errs = []
+        for lo, hi in zip(bounds[:-1], bounds[1:]):
+            if hi <= lo:
+                continue
+            nmc, mc = self._solve(NM[:lo], Ms[:lo], y[:lo], alpha)
+            errs.append(_mape(y[lo:hi], NM[lo:hi] @ nmc + Ms[lo:hi] @ mc))
+        return errs
+
+    def _cv_err(self, NM, Ms, y, alpha, n_tr):
+        errs = self._cv_fold_errs(NM, Ms, y, alpha, n_tr)
+        return float(np.mean(errs)) if errs else float("inf")
+
+    @staticmethod
     def _solve(NM, Ms, y, alpha):
-        """Constrained ridge: media coefs >= 0 and L2-penalized; non-media free."""
+        """Constrained partial-pooling ridge: media coefs >= 0, penalized toward their
+        COMMON mean (not zero) — with spend-scaled media columns the coefficients are
+        ROIs, so this shrinks each channel's ROI toward the cross-channel level while
+        leaving that level free. Outlier ROI claims are expensive; honest ones are not.
+        Non-media coefficients are unpenalized."""
         n, p = NM.shape
         k = Ms.shape[1]
         A = np.hstack([NM, Ms])
         b = y
-        if alpha > 0:
-            P = np.hstack([np.zeros((k, p)), np.sqrt(alpha) * np.eye(k)])
+        if alpha > 0 and k > 1:
+            # rows penalize sqrt(alpha) * (coef_j - mean(coef)): deviation from the pool
+            pool = np.sqrt(alpha) * y.std() * (np.eye(k) - np.ones((k, k)) / k)
+            P = np.hstack([np.zeros((k, p)), pool])
             A = np.vstack([A, P])
             b = np.concatenate([y, np.zeros(k)])
         lb = np.array([-np.inf] * p + [0.0] * k)
@@ -90,24 +152,68 @@ class BaselineMMM(BaseMMM):
 
     def fit(self, model_df, channel_cols, control_cols, target="revenue", date_col="date"):
         df = model_df.reset_index(drop=True)
-        nonmedia, media, params, y = self._features(df, channel_cols, control_cols, target)
+        n = len(df)
+        n_tr = int(n * self.train_frac)
+        # transforms selected on train weeks only (test block never touches selection)
+        nonmedia, media, params, y = self._features(df, channel_cols, control_cols,
+                                                    target, n_tr)
         nm_names, m_names = list(nonmedia), list(media)
         NM = np.column_stack([nonmedia[k] for k in nm_names])
         M = np.column_stack([media[k] for k in m_names])
-        sd = M.std(axis=0)
-        sd[sd == 0] = 1.0
-        Ms = M / sd  # scale media to unit std so ridge penalizes them comparably
-        n = len(df)
-        n_tr = int(n * self.train_frac)
 
-        # pick ridge strength by held-out MAPE
-        best = None
-        for alpha in self.ridge_alphas:
-            nmc, mc = self._solve(NM[:n_tr], Ms[:n_tr], y[:n_tr], alpha)
-            err = _mape(y[n_tr:], NM[n_tr:] @ nmc + Ms[n_tr:] @ mc)
-            if best is None or err < best[0]:
-                best = (err, alpha)
-        alpha = best[1]
+        # Coordinate refinement: the univariate init can't disambiguate correlated
+        # channels (one channel absorbs the shared signal, non-negativity zeroes the
+        # rest). Re-pick each channel's (decay, half_sat, slope) by the FULL regression's
+        # rolling-origin CV error within train, holding the other channels' transforms
+        # fixed. The terminal test block never touches selection.
+        spend_arr = {ch: df[ch].to_numpy(float) for ch in m_names}
+        spends = np.array([spend_arr[ch].sum() for ch in m_names])
+        alpha0 = 1.0
+        for _sweep in range(2):
+            for j, ch in enumerate(m_names):
+                best = None
+                for decay in self.DECAY_GRID:
+                    ad = geometric_adstock(spend_arr[ch], decay, self.adstock_max_lag)
+                    pos_tr = ad[:n_tr][ad[:n_tr] > 0]
+                    if ad[:n_tr].std() == 0 or not len(pos_tr):
+                        continue
+                    for q in self.HALF_QUANTILES:
+                        half = float(np.quantile(pos_tr, q))
+                        if half <= 0:
+                            continue
+                        for slope in self.SLOPE_GRID:
+                            m = hill_saturation(ad, half, slope)
+                            if m[:n_tr].std() == 0:
+                                continue
+                            Mtry = M.copy()
+                            Mtry[:, j] = m
+                            err = self._cv_err(NM, Mtry / self._roi_scale(Mtry, spends),
+                                               y, alpha0, n_tr)
+                            if best is None or err < best[0]:
+                                best = (err, float(decay), half, float(slope), m)
+                if best is not None:
+                    _, decay, half, slope, m = best
+                    M[:, j] = m
+                    media[ch] = m
+                    params[ch].update(decay=decay, half_sat=half, slope=slope)
+
+        sd = self._roi_scale(M, spends)
+        Ms = M / sd  # spend-scaled: coefficients are ROI-like, penalized comparably
+
+        # pick pooling strength by the same rolling-origin CV within train (the terminal
+        # test block stays untouched by every selection step), using the 1-SE rule:
+        # take the LARGEST alpha within one standard error of the best CV error — when
+        # the data can't distinguish pooling strengths, prefer more pooling (stability)
+        # over less (variance). This is what keeps small channels from claiming outsized
+        # ROI on noisy fits.
+        cv = {a: self._cv_fold_errs(NM, Ms, y, a, n_tr) for a in self.ridge_alphas}
+        means = {a: float(np.mean(e)) if e else float("inf") for a, e in cv.items()}
+        a_best = min(means, key=means.get)
+        se = (float(np.std(cv[a_best], ddof=1) / np.sqrt(len(cv[a_best])))
+              if len(cv[a_best]) > 1 else 0.0)
+        cutoff = means[a_best] + se
+        alpha = max((a for a in self.ridge_alphas if means[a] <= cutoff),
+                    default=a_best)
 
         nm_coef, mc_s = self._solve(NM, Ms, y, alpha)
         pred = NM @ nm_coef + Ms @ mc_s
@@ -119,7 +225,8 @@ class BaselineMMM(BaseMMM):
             contrib[ch] = mc_s[j] * Ms[:, j]
         contrib["baseline"] = NM @ nm_coef
 
-        # honest holdout metrics at the chosen alpha
+        # honest holdout: transforms and alpha were selected without these weeks, and
+        # they are evaluated here exactly once
         nmc_tr, mc_tr = self._solve(NM[:n_tr], Ms[:n_tr], y[:n_tr], alpha)
         pred_te = NM[n_tr:] @ nmc_tr + Ms[n_tr:] @ mc_tr
         fit_metrics = dict(r2=_r2(y, pred), mape=_mape(y, pred),
@@ -133,7 +240,7 @@ class BaselineMMM(BaseMMM):
         spend_tot = {ch: float(df[ch].sum()) for ch in m_names}
         col_sum = Ms.sum(axis=0)
         for _ in range(self.n_boot):
-            starts = self.rng.integers(0, max(n - L, 1), size=n_blocks)
+            starts = self.rng.integers(0, max(n - L + 1, 1), size=n_blocks)
             idx = np.concatenate([np.arange(s, min(s + L, n)) for s in starts])[:n]
             _, mcb = self._solve(NM[idx], Ms[idx], y[idx], alpha)
             for j, ch in enumerate(m_names):
