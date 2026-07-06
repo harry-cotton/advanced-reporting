@@ -61,6 +61,10 @@ def run(lens=None):
     (outdir / "commentary.md").write_text(
         generate_commentary(result, creport, m["target"]), encoding="utf-8")
 
+    # 5. VALIDATE vs known ground truth (synthetic runs only; no-op on real data)
+    from advanced_reporting.mmm.validation import validate_run
+    recovery = validate_run(outdir)
+
     if lens:
         from advanced_reporting.reporting.lens import lens_report
         lens_path = outdir / "lens_report.md"
@@ -79,6 +83,11 @@ def run(lens=None):
           f"currency {'MIXED' if dq['currency']['mixed'] else 'OK'}")
     print(f"  engine={result.engine}  R2={result.fit_metrics['r2']:.3f}  "
           f"holdoutR2={result.fit_metrics['test_r2']:.3f}")
+    if recovery is not None:
+        print(f"  ground-truth recovery: {'PASS' if recovery['passed'] else 'FAIL'} — "
+              f"{recovery['n_within_tolerance']}/{recovery['n_channels']} channels within "
+              f"{recovery['tolerance']:.0f}x of truth, rank corr {recovery['rank_corr']:.2f} "
+              f"-> validation.md")
     print(f"  {len(charts)} charts + commentary.md + data_quality.md written to {outdir}")
     return result
 
