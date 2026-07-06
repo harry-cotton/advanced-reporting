@@ -13,6 +13,11 @@
 # `geo`/`currency` from request params; schema.normalize() fills geo/currency defaults
 # when a source omits them.
 
+# Sources that measure web analytics, not ad delivery: their ad-metric columns are
+# filled with NaN ("not measured") and they carry no currency. Their rows coexist with
+# ad rows on the same grain (the store's dedup key includes `source`).
+web_analytics_sources: [ga4]
+
 channel_aliases:
   facebook: meta
   fb: meta

@@ -23,9 +23,13 @@ from pathlib import Path
 import pandas as pd
 
 from . import schema
-from ..utils import project_root, load_mappings
+from ..utils import load_mappings, project_root, standardize_channels
 
-KEY_COLS = ("date", "channel", "campaign", "geo")
+# Dedup grain. `campaign_id`/`account_id` disambiguate same-named campaigns across ad
+# accounts; `source` lets ad rows and web-analytics (GA4) rows for the same
+# (date, channel, campaign, geo) coexist — keep-latest applies WITHIN a source
+# (restatements), never across sources (which would silently delete one side's metrics).
+KEY_COLS = ("date", "channel", "campaign", "campaign_id", "account_id", "geo", "source")
 
 
 def _raw_root(raw_root=None) -> Path:
@@ -60,6 +64,14 @@ def write_pull(df: pd.DataFrame, source: str, *, raw_root=None, stamp: str | Non
     ``<source>_<stamp>.meta.json`` sidecar records the schema signature this pull was written
     under, so ``consolidate`` can refuse to merge stale/mismatched-schema pulls.
     """
+    # validate BEFORE writing — a malformed frame used to get a passing sidecar and
+    # then brick the entire consolidate for every source
+    schema.validate(df)
+    df = df.copy()
+    if "source" not in df.columns or df["source"].isna().all() \
+            or (df["source"].astype(str) == "").all():
+        df["source"] = source
+
     dest_dir = _raw_root(raw_root) / source
     dest_dir.mkdir(parents=True, exist_ok=True)
     stamp = stamp or datetime.now().strftime("%Y%m%d")
@@ -69,7 +81,8 @@ def write_pull(df: pd.DataFrame, source: str, *, raw_root=None, stamp: str | Non
         path = dest_dir / f"{source}_{stamp}_{suffix}.csv"
         n = 1
         while path.exists():
-            path = dest_dir / f"{source}_{stamp}_{suffix}-{n}.csv"
+            # zero-padded so 10+ same-second pulls still sort chronologically
+            path = dest_dir / f"{source}_{stamp}_{suffix}-{n:03d}.csv"
             n += 1
     df.to_csv(path, index=False)
 
@@ -141,6 +154,7 @@ def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
     mappings = load_mappings()
     current_sig = schema.schema_signature()
 
+    aliases = (mappings or {}).get("channel_aliases", {})
     frames, pulls, skipped = [], [], []
     for stamp, source, path in iter_pulls(raw_root):
         meta = _read_sidecar(path)
@@ -154,12 +168,40 @@ def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
             skipped.append({"source": source, "file": path.name,
                             "schema_signature": sig, "reason": reason})
             continue
-        df = schema.to_canonical(pd.read_csv(path), "default", mappings)
+        try:
+            df = schema.to_canonical(pd.read_csv(path), "default", mappings)
+        except Exception as e:   # one malformed pull must not brick the whole rebuild
+            reason = f"unreadable/malformed: {type(e).__name__}: {e}"
+            warnings.warn(f"Skipping pull {source}/{path.name}: {reason}", stacklevel=2)
+            skipped.append({"source": source, "file": path.name,
+                            "schema_signature": sig, "reason": reason})
+            continue
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        n_bad_dates = int(df["date"].isna().sum())
+
+        # standardize labels BEFORE dedup: keep-latest used to run on raw labels, so a
+        # restated pull with label drift ('META' vs 'facebook' vs 'meta') kept BOTH rows
+        # and downstream weekly sums silently double-counted spend
+        df["channel"] = standardize_channels(df["channel"], aliases)
+        for col in ("campaign", "geo", "campaign_id", "account_id", "source"):
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str).str.strip()
+        if "source" in df.columns:
+            df.loc[df["source"] == "", "source"] = source
+
+        # same-key rows WITHIN one pull are silent data loss (multi-account exports with
+        # duplicate campaign names) — cross-pull dups are the intended restatement path
+        dup_keys = int(df.duplicated(subset=list(KEY_COLS)).sum())
+        if dup_keys:
+            warnings.warn(f"Pull {source}/{path.name}: {dup_keys} same-key row(s) within "
+                          "one pull will be collapsed keep-last — if these are distinct "
+                          "campaigns, map campaign_id/account_id so they survive.",
+                          stacklevel=2)
         frames.append(df)
         dmin, dmax = _date_bounds(df)
         pulls.append({"source": source, "file": path.name, "stamp": stamp,
                       "schema_signature": sig, "rows": int(len(df)),
+                      "bad_date_rows": n_bad_dates, "dup_key_rows": dup_keys,
                       "date_min": dmin, "date_max": dmax})
 
     if frames:

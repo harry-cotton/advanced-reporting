@@ -361,14 +361,14 @@ def test_dq_flags_zero_spend_week():
     assert any(g["weeks_missing"] >= 1 for g in dq["coverage_gaps"])
 
 
-def test_dq_flags_mixed_currency():
+def test_mixed_currency_is_a_hard_gate():
+    # cleaning used to proceed (and the pipeline summed GBP + USD into one model);
+    # now it refuses loudly — convert at ingest first
     df = _canon_rows([("2025-01-06", "meta", "p", "US-NE", 100.0),
                       ("2025-01-06", "meta", "p", "UK", 100.0)])
     df.loc[1, "currency"] = "GBP"
-    cleaned, rep = clean_ad_data(df)
-    dq = clean.data_quality_report(df, cleaned, rep)
-    assert dq["currency"]["mixed"] is True
-    assert set(dq["currency"]["values"]) == {"USD", "GBP"}
+    with pytest.raises(ValueError, match="mixed currencies"):
+        clean_ad_data(df)
 
 
 def test_dq_report_has_coverage_and_pct_missing():

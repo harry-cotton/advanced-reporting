@@ -12,6 +12,13 @@ def norm_text(s) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
 
 
+def standardize_channels(series, aliases: dict):
+    """Lowercase/strip a channel Series and map through the alias table ('META',
+    'facebook' -> 'meta'). Idempotent — safe to apply in the store AND in clean."""
+    s = series.astype(str).str.strip().str.lower()
+    return s.map(lambda v: (aliases or {}).get(v, v))
+
+
 def phrase_in(text: str, phrase) -> bool:
     """Whole-word/phrase match: 'search' in 'paid search report' but NOT in 'research'.
 
@@ -93,7 +100,9 @@ def load_mappings(path: str | Path | None = None) -> dict:
         return _DEFAULT_MAPPINGS
     with open(p, encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
-    return {
-        "channel_aliases": data.get("channel_aliases", _DEFAULT_MAPPINGS["channel_aliases"]),
-        "sources": data.get("sources", _DEFAULT_MAPPINGS["sources"]),
-    }
+    # pass EVERYTHING through (new top-level sections must not be silently dropped),
+    # backfilling the two core sections from the built-in defaults if absent
+    out = dict(data)
+    out.setdefault("channel_aliases", _DEFAULT_MAPPINGS["channel_aliases"])
+    out.setdefault("sources", _DEFAULT_MAPPINGS["sources"])
+    return out

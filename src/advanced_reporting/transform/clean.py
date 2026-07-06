@@ -62,6 +62,16 @@ def clean_ad_data(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     rows_in = len(df)
     df["channel"] = standardize_channel(df["channel"])
 
+    # HARD GATE: mixed currencies must never be summed. The data-quality report used to
+    # flag 'MIXED' while the pipeline happily added EUR to USD and modeled the result.
+    if "currency" in df.columns:
+        currencies = sorted(df["currency"].dropna().astype(str).str.strip().unique())
+        currencies = [c for c in currencies if c and c.lower() not in ("nan", "<na>")]
+        if len(currencies) > 1:
+            raise ValueError(
+                f"mixed currencies in the data ({', '.join(currencies)}) — convert to one "
+                "currency at ingest before cleaning/modeling; refusing to sum across them")
+
     bad_dates = df["date"].isna().sum()
     df = df.dropna(subset=["date"])
     nans_filled = int(df[METRIC_COLS].isna().sum().sum())

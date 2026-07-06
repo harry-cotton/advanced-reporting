@@ -16,7 +16,14 @@ Columns
 - ``clicks``            : ad clicks.
 - ``conversions``       : attributed conversions.
 - ``platform_revenue``  : platform-ATTRIBUTED conversion value/revenue.
-- ``currency``          : ISO currency code for monetary fields (default ``"USD"``).
+- ``currency``          : ISO currency code for monetary fields (default ``"USD"`` for
+                          trusted-default sources only; real sources must provide it).
+- ``campaign_id``       : platform campaign id (optional; names get renamed, ids don't).
+- ``account_id``        : ad-account id (optional; disambiguates same-named campaigns).
+- ``source``            : which extractor produced the row (stamped by the store). Part
+                          of the dedup grain so ad rows and web-analytics rows for the
+                          same (date, channel, campaign, geo) coexist and merge
+                          column-wise downstream instead of overwriting each other.
 
 Mid-funnel / web-analytics columns (OPTIONAL, nullable -- ad platforms don't measure
 them, GA4/analytics do; default NaN = "not measured", NOT 0):
@@ -43,8 +50,9 @@ import pandas as pd
 
 # Bump on any canonical column change (human-readable label). The hash in
 # ``schema_signature()`` also changes automatically, so a forgotten bump can't cause a
-# silent schema mismatch. The engagement / mid-funnel tier is v2.
-SCHEMA_VERSION = 2
+# silent schema mismatch. v2 = engagement tier; v3 = source/campaign_id/account_id
+# (grain hardening for real multi-source data, 2026-07).
+SCHEMA_VERSION = 3
 
 
 class SchemaError(ValueError):
@@ -67,6 +75,8 @@ CANONICAL_SCHEMA: tuple[ColumnSpec, ...] = (
     ColumnSpec("date", "datetime64[ns]", True),
     ColumnSpec("channel", "string", True),
     ColumnSpec("campaign", "string", True),
+    ColumnSpec("campaign_id", "string", False, ""),
+    ColumnSpec("account_id", "string", False, ""),
     ColumnSpec("geo", "string", False, "national"),
     ColumnSpec("spend", "float64", True),
     ColumnSpec("impressions", "float64", True),
@@ -74,6 +84,7 @@ CANONICAL_SCHEMA: tuple[ColumnSpec, ...] = (
     ColumnSpec("conversions", "float64", True),
     ColumnSpec("platform_revenue", "float64", True),
     ColumnSpec("currency", "string", False, "USD"),
+    ColumnSpec("source", "string", False, ""),
     ColumnSpec("sessions", "float64", False, _NA),
     ColumnSpec("engaged_sessions", "float64", False, _NA),
     ColumnSpec("page_views", "float64", False, _NA),
@@ -163,10 +174,40 @@ def validate(df: pd.DataFrame, *, require_optional: bool = False) -> pd.DataFram
     return df
 
 
+# Sources whose currency default is trusted: the identity map (already-canonical pulls
+# re-read by the store) and the synthetic DGP. Every REAL source must carry a currency —
+# silently stamping USD on a EUR account is consistent-but-wrong, the worst failure mode.
+_CURRENCY_DEFAULT_OK = {"default", "synthetic"}
+
+
+def _web_analytics_sources(mappings: dict) -> set[str]:
+    return set((mappings or {}).get("web_analytics_sources") or ())
+
+
 def to_canonical(df: pd.DataFrame, source: str, mappings: dict, *,
                  currency: str | None = None) -> pd.DataFrame:
-    """One-call ingestion normalizer a connector uses: map -> normalize -> validate."""
+    """One-call ingestion normalizer a connector uses: map -> normalize -> validate.
+
+    Web-analytics sources (``mappings["web_analytics_sources"]``, e.g. GA4) measure no
+    ad metrics: their required ad columns are filled with NaN ("not measured") and
+    their currency is left null — following the documented GA4 path used to raise
+    SchemaError, and hand-fixing it would have let the store's old keep-last dedup
+    silently destroy either the ad rows or the analytics rows.
+    """
     df = apply_source_map(df, source, mappings)
+    is_web = source in _web_analytics_sources(mappings)
+    if is_web:
+        df = df.copy()
+        for col in METRIC_COLUMNS:
+            if col not in df.columns:
+                df[col] = float("nan")
+        if "currency" not in df.columns:
+            df["currency"] = pd.NA        # no monetary fields -> no currency claim
+    elif (source not in _CURRENCY_DEFAULT_OK and currency is None
+          and "currency" not in df.columns):
+        raise SchemaError(
+            f"source '{source}' provides no currency — map a currency column or pass "
+            "currency= explicitly (refusing to silently assume USD)")
     df = normalize(df, currency=currency)
     validate(df)
     return df
