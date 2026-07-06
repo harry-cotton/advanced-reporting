@@ -31,6 +31,9 @@ def main(argv=None) -> None:
                     help="data source name (synthetic, csv, google_ads, meta, tiktok, linkedin, ...)")
     ap.add_argument("--start", default=None, help="ISO start date (overrides config data.start)")
     ap.add_argument("--end", default=None, help="ISO end date (overrides config data.end)")
+    ap.add_argument("--inbox", action="store_true",
+                    help="ingest manually-downloaded export files from data/inbox/ "
+                         "(Google Ads / Meta / LinkedIn / GA4; format auto-detected)")
     ap.add_argument("--consolidate-only", action="store_true",
                     help="rebuild history.parquet from existing pulls without fetching")
     ap.add_argument("--reset", "--fresh", action="store_true", dest="reset",
@@ -46,7 +49,26 @@ def main(argv=None) -> None:
         else:
             print(f"Reset: nothing to archive for '{args.source}'.")
 
-    if not args.consolidate_only:
+    if args.inbox:
+        from advanced_reporting.ingestion.exports import read_export
+        inbox = ROOT / "data" / "inbox"
+        files = sorted(f for f in inbox.glob("*.csv") if not f.name.startswith("_"))
+        if not files:
+            print(f"Inbox {inbox.relative_to(ROOT)} has no .csv files — drop platform "
+                  "exports there (see data/inbox/README.md).")
+            return
+        ok = 0
+        for f in files:
+            try:
+                source, df = read_export(f)
+            except Exception as e:            # one bad file must not block the rest
+                print(f"  SKIPPED {f.name}: {e}")
+                continue
+            path = store.write_pull(df, source)
+            print(f"  {f.name} -> {source}: {len(df):,} rows -> {path.relative_to(ROOT)}")
+            ok += 1
+        print(f"Ingested {ok}/{len(files)} inbox file(s).")
+    elif not args.consolidate_only:
         start = args.start or d.get("start")
         end = args.end or d.get("end")
         kwargs = {}

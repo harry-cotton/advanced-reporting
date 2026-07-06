@@ -18,6 +18,24 @@
 # ad rows on the same grain (the store's dedup key includes `source`).
 web_analytics_sources: [ga4]
 
+# GA4 UI-export channel resolution (ingestion/exports.py). Campaign overrides run
+# FIRST (substring match against the campaign name) — 'google / cpc' alone can't
+# distinguish Search from Demand Gen; the campaign name can.
+ga4_export:
+  campaign_channel_overrides:
+    DemandGen: google_demandgen
+    Display: google_demandgen
+  source_medium_channels:
+    google / cpc: google_search
+    facebook / paid_social: meta
+    facebook / cpc: meta
+    instagram / paid_social: meta
+    linkedin / paid_social: linkedin
+    linkedin / cpc: linkedin
+    google / organic: organic_search
+    bing / organic: organic_search
+    (direct) / (none): direct
+
 channel_aliases:
   facebook: meta
   fb: meta
@@ -28,6 +46,9 @@ channel_aliases:
   google_search: google_search
   pmax: google_pmax
   performance_max: google_pmax
+  demand gen: google_demandgen
+  demandgen: google_demandgen
+  google_demandgen: google_demandgen
   google_pmax: google_pmax
   tik_tok: tiktok
   tik-tok: tiktok

@@ -29,6 +29,9 @@ Mid-funnel / web-analytics columns (OPTIONAL, nullable -- ad platforms don't mea
 them, GA4/analytics do; default NaN = "not measured", NOT 0):
 - ``sessions``                : landing sessions (GA4 ``sessions``).
 - ``engaged_sessions``        : engaged sessions (GA4 ``engagedSessions``).
+- ``key_events``              : analytics-measured conversions (GA4 key events, e.g.
+                                start_application). Deliberately SEPARATE from the ad
+                                platforms' self-attributed ``conversions``.
 - ``page_views``              : page/screen views (GA4 ``screenPageViews``).
 - ``video_views``             : video views (video-ish channels).
 - ``avg_engagement_seconds``  : average engagement time per session.
@@ -51,8 +54,10 @@ import pandas as pd
 # Bump on any canonical column change (human-readable label). The hash in
 # ``schema_signature()`` also changes automatically, so a forgotten bump can't cause a
 # silent schema mismatch. v2 = engagement tier; v3 = source/campaign_id/account_id
-# (grain hardening for real multi-source data, 2026-07).
-SCHEMA_VERSION = 3
+# (grain hardening for real multi-source data, 2026-07); v4 = key_events (analytics-
+# measured conversions, distinct from platform-claimed `conversions` so weekly sums
+# never add the two attribution systems together).
+SCHEMA_VERSION = 4
 
 
 class SchemaError(ValueError):
@@ -87,6 +92,7 @@ CANONICAL_SCHEMA: tuple[ColumnSpec, ...] = (
     ColumnSpec("source", "string", False, ""),
     ColumnSpec("sessions", "float64", False, _NA),
     ColumnSpec("engaged_sessions", "float64", False, _NA),
+    ColumnSpec("key_events", "float64", False, _NA),
     ColumnSpec("page_views", "float64", False, _NA),
     ColumnSpec("video_views", "float64", False, _NA),
     ColumnSpec("avg_engagement_seconds", "float64", False, _NA),
