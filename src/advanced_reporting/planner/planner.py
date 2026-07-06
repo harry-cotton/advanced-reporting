@@ -11,40 +11,35 @@ and adds the trace + token-cost metric the brief requires.
 from __future__ import annotations
 
 import json
-import os
+import logging
 
+from .. import llm
 from ..reporting import metrics as M
 from . import allocator, evidence, validate
 from .rails import allowed_channels, funnel_for_goal, load_rails
 from .schema import (Audience, CampaignPlan, Creative, FunnelStage, Platform,
                      PlannerTrace, Recommendation)
 
+log = logging.getLogger(__name__)
+
 _LLM_CONF = 0.7
 _DET_CONF = 0.5
 
+# --- model access: the shared gateway (advanced_reporting.llm) owns the client, the
+# --- schema enforcement, pricing, and any provider swap ---------------------------------
 
-# --- model access (single swap point: Bedrock / Vertex / direct API) -------------------
-
-def _llm_call(prompt: str, *, model: str, max_tokens: int):
-    """Make one Anthropic call; return ``(text, usage)``. The only place a model is invoked.
-
-    Swap the client here to target Bedrock/Vertex without touching the rest of the planner.
-    Imported lazily so ``anthropic`` stays an optional dependency (deterministic path needs none).
-    """
-    import anthropic  # lazy: only imported on the guarded LLM path
-
-    client = anthropic.Anthropic()
-    msg = client.messages.create(
-        model=model, max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return msg.content[0].text, msg.usage
+_DEFAULT_MODEL = "claude-sonnet-5"   # rail-clipped constrained selection: Sonnet-class is
+                                     # sufficient (2026-07 review); override via rails llm.model
 
 
 def _use_llm(use_llm) -> bool:
-    if use_llm is not None:
-        return bool(use_llm)
-    return bool(os.getenv("ANTHROPIC_API_KEY"))
+    if use_llm is None:
+        return llm.llm_enabled()     # checks the environment AND the project .env
+    if use_llm and not llm.llm_enabled():
+        # explicit --use-llm with no key used to silently no-op into a deterministic plan
+        log.warning("LLM path requested but no ANTHROPIC_API_KEY is available — the "
+                    "gateway will record the failure and the deterministic path runs.")
+    return bool(use_llm)
 
 
 # --- goals normalization ---------------------------------------------------------------
@@ -140,10 +135,31 @@ def _build_prompt(g: dict, rails: dict, ev: dict) -> str:
         "allowed_channels, a subset of audience_library, and a subset of creative_library, all "
         "within caps. Do NOT propose any budgets.\n\n"
         f"GOAL/RAILS:\n{json.dumps(payload, indent=2)}\n\n"
-        f"EVIDENCE (per channel):\n" + "\n".join(ev_lines) + "\n\n"
-        'Return ONLY JSON: {"channels": [...], "audiences": [{"audience_type","audience_detail",'
-        '"placement"}], "creatives": [{"creative","format","size"}], "rationale": "..."}'
+        "EVIDENCE (per channel):\n" + "\n".join(ev_lines)
     )
+
+
+def _selection_schema(rails: dict) -> dict:
+    """Structured-output schema for the qualitative selection — the API guarantees a
+    conforming reply, and ``_clip_selection`` still enforces library membership after."""
+    str_obj = lambda *keys: {  # noqa: E731 — tiny local schema builder
+        "type": "object",
+        "properties": {k: {"type": "string"} for k in keys},
+        "required": list(keys), "additionalProperties": False}
+    return {
+        "type": "object",
+        "properties": {
+            "channels": {"type": "array",
+                         "items": {"type": "string", "enum": allowed_channels(rails)}},
+            "audiences": {"type": "array",
+                          "items": str_obj("audience_type", "audience_detail", "placement")},
+            "creatives": {"type": "array",
+                          "items": str_obj("creative", "format", "size")},
+            "rationale": {"type": "string"},
+        },
+        "required": ["channels", "audiences", "creatives", "rationale"],
+        "additionalProperties": False,
+    }
 
 
 def _clip_selection(data: dict, g: dict, rails: dict) -> dict:
@@ -180,18 +196,21 @@ def _clip_selection(data: dict, g: dict, rails: dict) -> dict:
 
 
 def _propose_with_llm(g: dict, rails: dict, ev: dict):
-    """One guarded LLM call -> clipped spec + trace; returns ``(None, None)`` on any failure."""
-    try:
-        prompt = _build_prompt(g, rails, ev)
-        llm = rails.get("llm", {})
-        text, usage = _llm_call(prompt, model=llm.get("model", "claude-opus-4-8"),
-                                max_tokens=int(llm.get("max_tokens", 1500)))
-        data = json.loads(text[text.index("{"):text.rindex("}") + 1])
-        spec = _clip_selection(data, g, rails)
-        trace = _llm_trace(rails, usage, spec, ev)
-        return spec, trace
-    except Exception:
+    """One guarded, schema-enforced LLM call -> clipped spec + trace.
+
+    Returns ``(None, None)`` when the call fails — the gateway has already logged why
+    (no key, SDK missing, transport error) — and the deterministic proposer takes over.
+    """
+    cfg = rails.get("llm", {})
+    data, info = llm.call(_build_prompt(g, rails, ev),
+                          model=cfg.get("model", _DEFAULT_MODEL),
+                          schema=_selection_schema(rails),
+                          max_tokens=int(cfg.get("max_tokens", 1500)))
+    if not isinstance(data, dict):
         return None, None
+    spec = _clip_selection(data, g, rails)
+    trace = _llm_trace(info, spec, ev)
+    return spec, trace
 
 
 # --- traces ----------------------------------------------------------------------------
@@ -204,14 +223,13 @@ def _evidence_refs(ev: dict) -> list[str]:
     return refs
 
 
-def _llm_trace(rails: dict, usage, spec: dict, ev: dict) -> PlannerTrace:
-    pricing = rails.get("llm", {}).get("pricing", {})
-    inp = int(getattr(usage, "input_tokens", 0) or 0)
-    out = int(getattr(usage, "output_tokens", 0) or 0)
-    cost = inp / 1e6 * float(pricing.get("input", 0.0)) + out / 1e6 * float(pricing.get("output", 0.0))
+def _llm_trace(info: dict, spec: dict, ev: dict) -> PlannerTrace:
+    # cost comes from the gateway's model-keyed pricing table — it can no longer drift
+    # from the model id the way the hand-copied rails pricing block could
     return PlannerTrace(
-        source="llm", model=rails.get("llm", {}).get("model"),
-        input_tokens=inp, output_tokens=out, context_tokens=inp, cost_usd=cost,
+        source="llm", model=info.get("model"),
+        input_tokens=info.get("input_tokens", 0), output_tokens=info.get("output_tokens", 0),
+        context_tokens=info.get("input_tokens", 0), cost_usd=info.get("cost_usd") or 0.0,
         confidence=_LLM_CONF, evidence_refs=_evidence_refs(ev), choice=spec,
         notes="qualitative selection by guarded LLM (clipped to rails).")
 

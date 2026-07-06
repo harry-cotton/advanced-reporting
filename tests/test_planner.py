@@ -182,20 +182,18 @@ def test_plan_campaign_with_mmm_is_curve_grounded(rails):
 
 # --- 5. guarded LLM path (mocked) ------------------------------------------------------
 
-class _Usage:
-    input_tokens = 1_200
-    output_tokens = 300
-
-
 def test_llm_path_clips_to_rails_and_traces_cost(rails, monkeypatch):
-    canned = (
-        '{"channels": ["tiktok", "meta", "NOTACHANNEL"], '
-        '"audiences": [{"audience_type": "PROSPECT", "audience_detail": "BROAD", '
-        '"placement": "FEED"}, {"audience_type": "HACK", "audience_detail": "INVENTED"}], '
-        '"creatives": [{"creative": "BRANDHERO", "format": "VID", "size": "9x16"}], '
-        '"rationale": "test"}')
-    monkeypatch.setattr(P, "_llm_call",
-                        lambda prompt, *, model, max_tokens: (canned, _Usage()))
+    canned = {
+        "channels": ["tiktok", "meta", "NOTACHANNEL"],
+        "audiences": [{"audience_type": "PROSPECT", "audience_detail": "BROAD",
+                       "placement": "FEED"},
+                      {"audience_type": "HACK", "audience_detail": "INVENTED"}],
+        "creatives": [{"creative": "BRANDHERO", "format": "VID", "size": "9x16"}],
+        "rationale": "test"}
+    info = {"model": "claude-sonnet-5", "input_tokens": 1_200, "output_tokens": 300,
+            "cost_usd": 1_200 / 1e6 * 3.0 + 300 / 1e6 * 15.0, "error": None}
+    monkeypatch.setattr(P.llm, "call",
+                        lambda prompt, *, model, schema, max_tokens: (canned, info))
 
     plan = plan_campaign(_goals("awareness", 100_000), rails, use_llm=True)
 
@@ -206,14 +204,17 @@ def test_llm_path_clips_to_rails_and_traces_cost(rails, monkeypatch):
     assert ("HACK", "INVENTED") not in auds                            # invented audience dropped
     assert plan.trace.source == "llm"
     assert (plan.trace.input_tokens, plan.trace.output_tokens) == (1_200, 300)
-    assert plan.trace.cost_usd == pytest.approx(1_200 / 1e6 * 5.0 + 300 / 1e6 * 25.0)
+    assert plan.trace.cost_usd == pytest.approx(info["cost_usd"])      # gateway-priced
     assert check(plan, rails) == []                                    # still rails-valid
 
 
 def test_llm_failure_falls_back_to_deterministic(rails, monkeypatch):
-    def _boom(prompt, *, model, max_tokens):
-        raise RuntimeError("network down")
-    monkeypatch.setattr(P, "_llm_call", _boom)
+    # the gateway never raises — it returns (None, info) and logs; the planner must
+    # fall back to the deterministic proposer
+    info = {"model": "claude-sonnet-5", "input_tokens": 0, "output_tokens": 0,
+            "cost_usd": 0.0, "error": "APIConnectionError: network down"}
+    monkeypatch.setattr(P.llm, "call",
+                        lambda prompt, *, model, schema, max_tokens: (None, info))
     plan = plan_campaign(_goals("awareness"), rails, use_llm=True)
     assert plan.trace.source == "deterministic"
     assert check(plan, rails) == []

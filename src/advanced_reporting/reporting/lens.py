@@ -10,13 +10,12 @@ tested default.
 Imports only ``metrics`` + ``utils`` (no ingestion/transform), so it stays light and testable.
 """
 from __future__ import annotations
-import json
-import os
 from dataclasses import dataclass
 
 import pandas as pd
 
 from . import metrics as M
+from .. import llm
 from ..utils import load_config, load_mappings, phrase_in
 
 
@@ -94,33 +93,43 @@ def _validate(spec: ReportSpec, goals, registry) -> ReportSpec:
     return spec
 
 
+# classification into three tiny enums — Haiku-class is the right tier (2026-07 review)
+_LENS_MODEL = "claude-haiku-4-5"
+_TONES = ("standard", "executive", "detailed")
+
+
 def _parse_with_llm(text, goals, registry, config, mappings):
-    """Optional LLM parse -> ReportSpec. Returns None on any failure (fall back to rules)."""
-    try:
-        import anthropic
-        valid_goals = list((goals.get("goal_primary_tier") or {}).keys())
-        known = list((config.get("modeling") or {}).get("channel_spend_cols", []))
-        prompt = (
-            "Map this marketing-report request to JSON with keys "
-            '"goal", "channels", "tone". '
-            "goal must be one of " + ", ".join(valid_goals) + ". "
-            "channels is a subset of " + ", ".join(known) + " (or []). "
-            'tone is one of "standard", "executive", "detailed". '
-            "Return ONLY the JSON.\n\nRequest: " + text
-        )
-        client = anthropic.Anthropic()
-        msg = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=200,
-                                     messages=[{"role": "user", "content": prompt}])
-        raw = msg.content[0].text
-        data = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
-        goal = data.get("goal") if data.get("goal") in valid_goals else M.resolve_goal(text, goals)
-        tier = M.primary_tier(goal, goals)
-        channels = [c for c in (data.get("channels") or []) if c in known] or None
-        tone = data.get("tone") if data.get("tone") in ("standard", "executive", "detailed") else "standard"
-        return ReportSpec(goal=goal, primary_tier=tier, metrics=select_metrics(tier, registry),
-                          channels=channels, tone=tone, source_text=text)
-    except Exception:
+    """Optional LLM parse -> ReportSpec via the shared gateway. Returns None on any
+    failure (callers fall back to the keyword parser); the gateway logs the reason."""
+    valid_goals = list((goals.get("goal_primary_tier") or {}).keys())
+    known = list((config.get("modeling") or {}).get("channel_spend_cols", []))
+    if not valid_goals or not known:
         return None
+    schema = {
+        "type": "object",
+        "properties": {
+            "goal": {"type": "string", "enum": valid_goals},
+            "channels": {"type": "array", "items": {"type": "string", "enum": known}},
+            "tone": {"type": "string", "enum": list(_TONES)},
+        },
+        "required": ["goal", "channels", "tone"],
+        "additionalProperties": False,
+    }
+    aliases = ", ".join(f"{a}={c}" for a, c in (mappings.get("channel_aliases") or {}).items()
+                        if c in known and len(a) >= 3 and a != c)
+    data, _info = llm.call(
+        "Classify this marketing-report request. channels = only platforms explicitly "
+        "mentioned (empty list if none). Channel aliases: " + (aliases or "none") + ".\n\n"
+        "Request: " + text,
+        model=_LENS_MODEL, schema=schema, max_tokens=300)
+    if not isinstance(data, dict):
+        return None
+    goal = data.get("goal") if data.get("goal") in valid_goals else M.resolve_goal(text, goals)
+    tier = M.primary_tier(goal, goals)
+    channels = [c for c in (data.get("channels") or []) if c in known] or None
+    tone = data.get("tone") if data.get("tone") in _TONES else "standard"
+    return ReportSpec(goal=goal, primary_tier=tier, metrics=select_metrics(tier, registry),
+                      channels=channels, tone=tone, source_text=text)
 
 
 def parse_lens(text, *, goals=None, registry=None, config=None, mappings=None,
@@ -131,7 +140,7 @@ def parse_lens(text, *, goals=None, registry=None, config=None, mappings=None,
     config = load_config() if config is None else config
     mappings = load_mappings() if mappings is None else mappings
     if use_llm is None:
-        use_llm = bool(os.getenv("ANTHROPIC_API_KEY"))
+        use_llm = llm.llm_enabled()   # checks the environment AND the project .env
 
     if use_llm:
         spec = _parse_with_llm(text, goals, registry, config, mappings)

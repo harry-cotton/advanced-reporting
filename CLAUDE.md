@@ -70,7 +70,7 @@ store the pipeline reads from, so history grows over time. A second, forward pat
    selector + funnel drop-off + a free-text lens box, alongside standard non-MMM metrics.
 6. **`planner/`** — turns *goals + rails* into a validated **`CampaignPlan`** that feeds the
    naming generator (Plan rows → names + UTMs). Same spine as `lens.py`: deterministic default
-   + a **guarded LLM path** (one structured `claude-opus-4-8` call when `ANTHROPIC_API_KEY` is
+   + a **guarded LLM path** (one structured call — model set in rails `llm.model`, Sonnet-class default — when a key is
    set). The **LLM only selects/justifies, clipped to the rails** (it can't invent options or
    budgets); **all numbers come from the deterministic `allocator`** (marginal-return
    water-filling against the MMM response curves under the rails' min/max; rules fallback when
@@ -111,7 +111,7 @@ holds the granular media data.
   MMM response curves — platform numbers are walled-garden, so used for reach/feasibility only,
   never cross-channel allocation). Feed the LLM only goals + rails + compact evidence (never raw
   tables); trace token cost. Same guarded-path pattern as `lens.py`; pluggable via `planner/factory.py`.
-  Model access sits behind one `_llm_call` swap point (Bedrock / Vertex / direct = one-line swap).
+  Model access sits behind ONE gateway — `src/advanced_reporting/llm.py` (structured outputs, cost tracing, .env loading; Bedrock / Vertex / Claude Platform on AWS = one-line swap there).
 
 ## Conventions
 
@@ -128,7 +128,7 @@ holds the granular media data.
 - New MMM engines go behind `BaseMMM` and return an `MMMResult`; new data sources go behind
   `DataSource` and return the canonical schema — so reporting/dashboard stay agnostic.
 - Tests: `pytest` in `tests/` (`pythonpath=src` set in `pyproject.toml`). Add a test when you
-  add a layer or behavior. (Currently **85 passing**.)
+  add a layer or behavior. (Run `pytest -q` for the current count.)
 - Keep dependencies light (pandas / numpy / scipy / matplotlib / pyyaml / streamlit / pyarrow /
   openpyxl — the last for naming-generator + planner xlsx I/O). `anthropic` is optional/lazy
   (only the guarded LLM paths import it). Meridian is the one heavy, optional dep — install separately.
@@ -176,11 +176,11 @@ and (unless `--no-names`) runs the generator to `outputs/trafficking_sheet.xlsx`
 ## Status
 
 Phase 1 (thin slice), the **Phase 2 data layer**, the full **goal-aware reporting layer**, and the
-**campaign planner layer** are complete and passing (**85 tests**), all on synthetic data. The
+**campaign planner layer** are complete and passing (`pytest -q`), all on synthetic data. The
 pipeline runs end-to-end through the durable daily store, emits the national + geo×weekly modeling
 tables and a data-quality report, fits the baseline MMM (synthetic run ≈ R² 0.85 / holdout ≈ 0.76),
 and the dashboard renders the KPI pyramid + goal lens + free-text report lens. The planner turns
-goals + rails into a validated `CampaignPlan` (deterministic default + guarded `claude-opus-4-8`
+goals + rails into a validated `CampaignPlan` (deterministic default + guarded Sonnet-class
 selection; allocator owns budgets) and round-trips into the naming generator with zero warnings. The
 schema carries the mid-funnel engagement (intent) tier (populated on synthetic; `GA4Source` skeleton
 ready), though engagement is **not yet aggregated** into the MMM modeling table. Real-platform

@@ -71,11 +71,11 @@ brand_safety:
   blocked_placements: []          # placements that must never appear in a plan
 
 llm:
-  model: claude-opus-4-8          # configurable; deterministic default path needs no model
+  # Rail-clipped constrained selection — Sonnet-class is sufficient (2026-07 review).
+  # Pricing for the cost trace lives in src/advanced_reporting/llm.py, keyed by model
+  # id, so swapping this model can't silently break the traced dollar figures.
+  model: claude-sonnet-5
   max_tokens: 1500
-  pricing:                        # USD per 1M tokens, for the tracked cost metric
-    input: 5.0
-    output: 25.0
 
 # Pointer to the naming vocab so the planner stays in lockstep with the generator.
 naming:

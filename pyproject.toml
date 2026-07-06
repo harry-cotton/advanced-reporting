@@ -21,6 +21,10 @@ dependencies = [
 # Target MMM engine (heavy: TensorFlow Probability) — install separately when ready:
 #   uv pip install google-meridian
 
+[project.optional-dependencies]
+# the guarded LLM paths only — deterministic paths never import it
+llm = ["anthropic>=0.40"]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
