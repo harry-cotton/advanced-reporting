@@ -15,7 +15,9 @@ A naming convention is still a grammar: the Scheme composes each level (Campaign
 DECODED later with the same scheme.
 """
 from __future__ import annotations
-import sys, itertools, re
+import sys
+import itertools
+import re
 from urllib.parse import urlencode
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side

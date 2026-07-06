@@ -22,7 +22,7 @@ def _config_path(name: str = "planner_rails.yaml", path=None) -> Path:
 
 def load_rails(path=None) -> dict:
     """Return (and validate) the planner rails from ``config/planner_rails.yaml``."""
-    with open(_config_path(path=path)) as fh:
+    with open(_config_path(path=path), encoding="utf-8") as fh:
         rails = yaml.safe_load(fh) or {}
     missing = [s for s in _REQUIRED_SECTIONS if s not in rails]
     if missing:

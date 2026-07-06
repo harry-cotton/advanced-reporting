@@ -16,7 +16,6 @@ no half-mapped numbers leak downstream. Validate against your installed version
 the first time you switch `modeling.engine` to `meridian`.
 """
 from __future__ import annotations
-import numpy as np
 import pandas as pd
 
 from .base import BaseMMM, MMMResult

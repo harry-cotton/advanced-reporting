@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))  # for the root-level naming package
 
 from advanced_reporting.utils import load_config
 from advanced_reporting.planner import plan_campaign, load_rails, write_plan_xlsx
@@ -78,8 +79,7 @@ def run(goal, budget, *, market=None, campaign=None, primary_kpi="conversions",
     print(f"  -> {xlsx}")
 
     if write_names:
-        sys.path.insert(0, str(ROOT / "naming"))
-        import naming_generator
+        from naming import naming_generator
         out = outdir / "trafficking_sheet.xlsx"
         naming_generator.generate(str(xlsx), str(out))
         print(f"  -> {out}")

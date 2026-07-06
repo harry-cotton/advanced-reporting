@@ -31,7 +31,7 @@ def _config_path(name: str, path=None) -> Path:
 
 
 def _load_yaml(path: Path) -> dict:
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
 
 

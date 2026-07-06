@@ -5,7 +5,6 @@ The deterministic path is forced with use_llm=False so a present ANTHROPIC_API_K
 change the outcome.
 """
 import pandas as pd
-import pytest
 
 from advanced_reporting.reporting import lens as L
 from advanced_reporting.reporting import metrics as M

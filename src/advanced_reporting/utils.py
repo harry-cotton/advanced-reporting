@@ -36,7 +36,7 @@ def load_config(path: str | Path | None = None) -> dict:
         path = root / "config" / "config.yaml"
         if not Path(path).exists():
             path = root / "config" / "config.example.yaml"
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
 
@@ -74,7 +74,7 @@ def load_mappings(path: str | Path | None = None) -> dict:
     p = Path(path)
     if not p.exists():
         return _DEFAULT_MAPPINGS
-    with open(p) as fh:
+    with open(p, encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     return {
         "channel_aliases": data.get("channel_aliases", _DEFAULT_MAPPINGS["channel_aliases"]),

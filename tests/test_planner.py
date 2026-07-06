@@ -2,7 +2,6 @@
 deterministic allocation, the deterministic plan path, and the guarded LLM path (mocked)."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -78,14 +77,12 @@ def _mmm_result(n=40, seed=0):
 # --- 1. round-trip / answer key --------------------------------------------------------
 
 def test_plan_cols_match_generator():
-    sys.path.insert(0, str(ROOT / "naming"))
-    import naming_generator
+    from naming import naming_generator
     assert PLAN_COLS == naming_generator.PLAN_COLS
 
 
 def test_round_trip_into_generator(rails, tmp_path):
-    sys.path.insert(0, str(ROOT / "naming"))
-    import naming_generator
+    from naming import naming_generator
 
     plan = plan_campaign(_goals("awareness", 90_000), rails, use_llm=False)
     rows = plan.to_plan_rows()
