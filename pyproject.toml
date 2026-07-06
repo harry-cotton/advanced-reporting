@@ -17,6 +17,7 @@ dependencies = [
     "pyarrow>=14",        # parquet engine for the durable raw store
     "openpyxl>=3.1",      # xlsx I/O for the naming generator + planner bridge
     "streamlit>=1.30",
+    "plotly>=5.18",       # dashboard charts (house style via dashboard/theme.py)
 ]
 # Target MMM engine (heavy: TensorFlow Probability) — install separately when ready:
 #   uv pip install google-meridian

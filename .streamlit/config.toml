@@ -1,0 +1,12 @@
+# Streamlit theme — light-first editorial look (dashboard redesign R1).
+# Design tokens live in src/advanced_reporting/dashboard/theme.py; keep the two in sync.
+[theme]
+base = "light"
+primaryColor = "#1F4E79"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F4EF"
+textColor = "#1C1C28"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

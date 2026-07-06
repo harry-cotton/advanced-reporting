@@ -10,14 +10,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
+from advanced_reporting.dashboard import theme  # noqa: E402
 from advanced_reporting.reporting import metrics as M  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting", layout="wide")
+theme.inject_css()
 st.title("Advanced Reporting — Campaign Dashboard")
 
 metrics_f = ROOT / "data" / "processed" / "channel_weekly_metrics.csv"
@@ -146,9 +149,17 @@ agg["CPA"] = (agg["spend"] / agg["conversions"]).round(0)
 agg["ROAS"] = (agg["platform_revenue"] / agg["spend"]).round(2)
 st.dataframe(agg, use_container_width=True)
 
-# --- spend & revenue over time ---
-st.subheader("Spend & revenue over time")
-st.line_chart(f.groupby("date")[["spend", "platform_revenue"]].sum())
+# --- spend over time (house-style plotly; per-channel so the mix is visible) ---
+st.subheader("Spend over time")
+ts = (f.groupby(["date", "channel"], as_index=False)["spend"].sum()
+        .sort_values("date"))
+fig = go.Figure()
+for i, ch in enumerate(sorted(ts["channel"].unique())):
+    g = ts[ts["channel"] == ch]
+    fig.add_scatter(x=g["date"], y=g["spend"], name=theme.channel_label(ch),
+                    mode="lines", line=dict(color=theme.channel_color(ch, i), width=2),
+                    stackgroup="spend")
+theme.plotly_chart(fig, yfmt="currency")
 
 # --- MMM summary (if a model run is available) ---
 if summary_f.exists():
