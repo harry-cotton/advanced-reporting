@@ -20,6 +20,19 @@ Columns
                           trusted-default sources only; real sources must provide it).
 - ``campaign_id``       : platform campaign id (optional; names get renamed, ids don't).
 - ``account_id``        : ad-account id (optional; disambiguates same-named campaigns).
+- ``ad_group``          : platform sub-campaign entity name (Meta ad set, Google ad
+                          group, LinkedIn creative). ``""`` = campaign-level row. Part of
+                          the dedup grain; when both grains arrive for the same campaign,
+                          the store keeps the ad-level rows and drops their campaign-level
+                          aggregate (see ``store.consolidate``).
+
+Decoded naming-convention fields (OPTIONAL, ``""`` for campaign-level sources; parsed
+from ``ad_group`` by ``ingestion/naming_decode.py`` using the naming generator's
+grammar — names that don't conform land in ``audience_type="(unparsed)"``, never guessed):
+- ``audience_type``     : e.g. ``PROSPECT`` / ``RETARGET`` (or ``"(unparsed)"``).
+- ``audience_detail``   : e.g. ``LAL-1PCT`` / ``SITE-90D``.
+- ``creative``          : creative concept, from Ad-grammar names (e.g. ``BRANDHERO``).
+- ``creative_format``   : e.g. ``VID`` / ``STATIC``.
 - ``source``            : which extractor produced the row (stamped by the store). Part
                           of the dedup grain so ad rows and web-analytics rows for the
                           same (date, channel, campaign, geo) coexist and merge
@@ -56,8 +69,9 @@ import pandas as pd
 # silent schema mismatch. v2 = engagement tier; v3 = source/campaign_id/account_id
 # (grain hardening for real multi-source data, 2026-07); v4 = key_events (analytics-
 # measured conversions, distinct from platform-claimed `conversions` so weekly sums
-# never add the two attribution systems together).
-SCHEMA_VERSION = 4
+# never add the two attribution systems together); v5 = ad-level grain (`ad_group` in
+# the dedup key + audience/creative fields decoded from the naming convention).
+SCHEMA_VERSION = 5
 
 
 class SchemaError(ValueError):
@@ -82,6 +96,11 @@ CANONICAL_SCHEMA: tuple[ColumnSpec, ...] = (
     ColumnSpec("campaign", "string", True),
     ColumnSpec("campaign_id", "string", False, ""),
     ColumnSpec("account_id", "string", False, ""),
+    ColumnSpec("ad_group", "string", False, ""),
+    ColumnSpec("audience_type", "string", False, ""),
+    ColumnSpec("audience_detail", "string", False, ""),
+    ColumnSpec("creative", "string", False, ""),
+    ColumnSpec("creative_format", "string", False, ""),
     ColumnSpec("geo", "string", False, "national"),
     ColumnSpec("spend", "float64", True),
     ColumnSpec("impressions", "float64", True),

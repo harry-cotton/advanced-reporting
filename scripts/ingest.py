@@ -50,6 +50,7 @@ def main(argv=None) -> None:
             print(f"Reset: nothing to archive for '{args.source}'.")
 
     if args.inbox:
+        from advanced_reporting.ingestion import naming_decode
         from advanced_reporting.ingestion.exports import read_export
         inbox = ROOT / "data" / "inbox"
         files = sorted(f for f in inbox.glob("*.csv") if not f.name.startswith("_"))
@@ -66,6 +67,12 @@ def main(argv=None) -> None:
                 continue
             path = store.write_pull(df, source)
             print(f"  {f.name} -> {source}: {len(df):,} rows -> {path.relative_to(ROOT)}")
+            if "ad_group" in df.columns:
+                ad_level = df[df["ad_group"].fillna("") != ""]
+                if len(ad_level):
+                    rate = naming_decode.unparsed_rate(df)
+                    print(f"    ad-level grain: {ad_level['ad_group'].nunique()} ad "
+                          f"groups; naming-convention unparsed rate {rate:.0%}")
             ok += 1
         print(f"Ingested {ok}/{len(files)} inbox file(s).")
     elif not args.consolidate_only:
@@ -86,6 +93,10 @@ def main(argv=None) -> None:
     print(f"Consolidated {len(manifest['pulls'])} pull(s) -> "
           f"{manifest['history_rows']:,} canonical daily rows in "
           f"{Path(manifest['history_path']).relative_to(ROOT)}")
+    if manifest.get("superseded_campaign_rows"):
+        print(f"  {manifest['superseded_campaign_rows']:,} campaign-level row(s) "
+              "superseded by ad-level rows for the same campaign (finer grain kept; "
+              "no double-counting)")
     for src, info in manifest["sources"].items():
         print(f"  {src:<12} {info['pulls']} pull(s), latest {info['rows_latest']:,} rows")
     if manifest["skipped_pulls"]:

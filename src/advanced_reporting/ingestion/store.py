@@ -3,7 +3,8 @@
 Extraction (``scripts/ingest.py``) writes each pull as an immutable, date-stamped CSV under
 ``data/raw/<source>/<source>_<stamp>.csv`` (never overwritten). ``consolidate()`` merges
 *all* pulls into one canonical daily table ``data/processed/history.parquet``, deduped on the
-grain key ``(date, channel, campaign, geo)`` keeping the **latest pull**. It is incremental
+grain key (``KEY_COLS`` — date/channel/campaign/ids/ad_group/geo/source) keeping the
+**latest pull**. It is incremental
 (new pulls extend history) and idempotent (re-consolidating the same pulls yields an
 identical table). The pipeline reads ``history.parquet`` — the store, not a live fetch — so
 reporting is reproducible.
@@ -26,10 +27,19 @@ from . import schema
 from ..utils import load_mappings, project_root, standardize_channels
 
 # Dedup grain. `campaign_id`/`account_id` disambiguate same-named campaigns across ad
-# accounts; `source` lets ad rows and web-analytics (GA4) rows for the same
-# (date, channel, campaign, geo) coexist — keep-latest applies WITHIN a source
-# (restatements), never across sources (which would silently delete one side's metrics).
-KEY_COLS = ("date", "channel", "campaign", "campaign_id", "account_id", "geo", "source")
+# accounts; `ad_group` lets ad-set/ad-group-level rows coexist under one campaign (a
+# campaign-level row has ad_group="" and is DROPPED when ad-level rows cover the same
+# key — see the supersede step in consolidate); `source` lets ad rows and web-analytics
+# (GA4) rows for the same (date, channel, campaign, geo) coexist — keep-latest applies
+# WITHIN a source (restatements), never across sources (which would silently delete one
+# side's metrics).
+KEY_COLS = ("date", "channel", "campaign", "campaign_id", "account_id", "ad_group",
+            "geo", "source")
+
+# String columns normalized (fillna("") + strip) before dedup so label drift and
+# NaN-vs-"" never split the grain.
+_TEXT_KEY_COLS = ("campaign", "geo", "campaign_id", "account_id", "ad_group", "source",
+                  "audience_type", "audience_detail", "creative", "creative_format")
 
 
 def _raw_root(raw_root=None) -> Path:
@@ -183,7 +193,7 @@ def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
         # restated pull with label drift ('META' vs 'facebook' vs 'meta') kept BOTH rows
         # and downstream weekly sums silently double-counted spend
         df["channel"] = standardize_channels(df["channel"], aliases)
-        for col in ("campaign", "geo", "campaign_id", "account_id", "source"):
+        for col in _TEXT_KEY_COLS:
             if col in df.columns:
                 df[col] = df[col].fillna("").astype(str).str.strip()
         if "source" in df.columns:
@@ -213,6 +223,21 @@ def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
     else:
         history = pd.DataFrame(columns=list(schema.CANONICAL_COLUMNS))
 
+    # Supersede: a campaign-level row (ad_group="") is the AGGREGATE of that campaign's
+    # ad-level rows. When both grains land for the same key within one source (e.g. a
+    # campaign export AND an ad-set export dropped in the same inbox), keeping both would
+    # double-count every metric downstream — keep the finer grain, drop its aggregate.
+    superseded = 0
+    if len(history) and (history["ad_group"] != "").any():
+        parent_key = [c for c in KEY_COLS if c != "ad_group"]
+        detail_idx = pd.MultiIndex.from_frame(
+            history.loc[history["ad_group"] != "", parent_key].drop_duplicates())
+        drop = ((history["ad_group"] == "").to_numpy()
+                & pd.MultiIndex.from_frame(history[parent_key]).isin(detail_idx))
+        superseded = int(drop.sum())
+        if superseded:
+            history = history.loc[~drop].reset_index(drop=True)
+
     history_path.parent.mkdir(parents=True, exist_ok=True)
     history.to_parquet(history_path, index=False)
 
@@ -227,6 +252,7 @@ def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
         "schema_signature": current_sig,
         "key_columns": list(KEY_COLS),
         "history_rows": int(len(history)),
+        "superseded_campaign_rows": superseded,
         "history_path": str(history_path),
         "pulls": pulls,
         "skipped_pulls": skipped,

@@ -16,6 +16,14 @@ Formats handled (fixtures: ``scripts/generate_sample_exports.py``):
   their own non-ad channels, Key events -> ``key_events`` (NEVER ``conversions`` —
   platform-claimed and analytics-measured conversions are different numbers and
   must not be summed together).
+
+Ad-level variants (same platforms, one grain finer — ``ad_group`` carries the ad-set /
+ad-group / creative name, and the naming-convention fields are decoded at ingest via
+``naming_decode`` so the store carries them):
+- Google Ads ad group report, Meta ad-set export, LinkedIn creative report.
+Ad-level pulls file under the SAME source as their campaign-level sibling; when both
+grains land for one campaign the store keeps the ad-level rows and drops the
+campaign-level aggregate (``store.consolidate``), so mixed drops never double-count.
 """
 from __future__ import annotations
 
@@ -24,11 +32,25 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import schema
+from . import naming_decode, schema
 from ..utils import load_mappings
 
 # source names the store will file pulls under
 GOOGLE, META, LINKEDIN, GA4 = "google_ads", "meta_ads", "linkedin_ads", "ga4"
+# ad-level format keys (distinct from the source: read_export returns the SOURCE, so
+# e.g. a Meta ad-set export still files under `meta_ads` next to campaign-level pulls)
+GOOGLE_ADGROUPS, META_ADSETS, LINKEDIN_CREATIVES = (
+    "google_ads_adgroups", "meta_ads_adsets", "linkedin_ads_creatives")
+
+
+def _with_decoded(out: pd.DataFrame, names: pd.Series) -> pd.DataFrame:
+    """Attach ad_group + the decoded naming-convention fields to a canonical frame."""
+    out = out.copy()
+    out["ad_group"] = names.astype(str).str.strip().to_numpy()
+    decoded = naming_decode.decode_series(out["ad_group"])
+    for col in naming_decode.FIELD_COLUMNS:
+        out[col] = decoded[col].to_numpy()
+    return out
 
 
 def _num(s) -> pd.Series:
@@ -40,17 +62,21 @@ def _num(s) -> pd.Series:
 
 
 def detect_format(path) -> str | None:
-    """Sniff which platform an export file came from (None = unrecognized)."""
+    """Sniff which platform/grain an export file came from (None = unrecognized)."""
     head = Path(path).read_text(encoding="utf-8-sig", errors="replace")[:2000]
     first = head.splitlines()[0].strip() if head.splitlines() else ""
     if first.startswith("Campaign report"):
         return GOOGLE
+    if first.startswith("Ad group report"):
+        return GOOGLE_ADGROUPS
+    if first.startswith("Creative Performance Report"):
+        return LINKEDIN_CREATIVES
     if first.startswith("Campaign Performance Report"):
         return LINKEDIN
     if first.startswith("#") and "Session source / medium" in head:
         return GA4
-    if "Amount spent" in first:
-        return META
+    if "Amount spent" in first:                       # ad-set check first: both match
+        return META_ADSETS if "Ad set name" in first else META
     return None
 
 
@@ -62,9 +88,8 @@ def _find_header_row(path: Path, marker: str) -> int:
     raise schema.SchemaError(f"{path.name}: no header row starting with '{marker}' found")
 
 
-def read_google_ads_export(path, mappings=None) -> pd.DataFrame:
-    path = Path(path)
-    mappings = mappings or load_mappings()
+def _google_frame(path: Path) -> pd.DataFrame:
+    """Shared Google Ads UI-report parse: skip title rows, drop totals, map channels."""
     hdr = _find_header_row(path, "Day")
     df = pd.read_csv(path, skiprows=hdr)
     df = df[~df["Day"].astype(str).str.startswith("Total")]      # summary rows out
@@ -82,7 +107,23 @@ def read_google_ads_export(path, mappings=None) -> pd.DataFrame:
         "platform_revenue": _num(df["Conv. value"]),
         "currency": df["Currency code"].astype(str).str.strip(),
     })
-    return schema.to_canonical(out, GOOGLE, mappings)
+    if "Ad group" in df.columns:
+        out = _with_decoded(out, df["Ad group"])
+    return out
+
+
+def read_google_ads_export(path, mappings=None) -> pd.DataFrame:
+    return schema.to_canonical(_google_frame(Path(path)), GOOGLE,
+                               mappings or load_mappings())
+
+
+def read_google_adgroup_export(path, mappings=None) -> pd.DataFrame:
+    """Google Ads *ad group* report: campaign-report quirks + an ``Ad group`` column."""
+    path = Path(path)
+    out = _google_frame(path)
+    if "ad_group" not in out.columns:
+        raise schema.SchemaError(f"{path.name}: ad group report without an 'Ad group' column")
+    return schema.to_canonical(out, GOOGLE, mappings or load_mappings())
 
 
 def read_meta_export(path, mappings=None) -> pd.DataFrame:
@@ -104,12 +145,13 @@ def read_meta_export(path, mappings=None) -> pd.DataFrame:
         "conversions": _num(df["Results"]),
         "platform_revenue": float("nan"),                        # not in this export
     })
+    if "Ad set name" in df.columns:                              # ad-set-level export
+        out = _with_decoded(out, df["Ad set name"])
     return schema.to_canonical(out, META, mappings, currency=currency)
 
 
-def read_linkedin_export(path, mappings=None) -> pd.DataFrame:
-    path = Path(path)
-    mappings = mappings or load_mappings()
+def _linkedin_frame(path: Path) -> tuple[pd.DataFrame, str | None]:
+    """Shared LinkedIn Campaign Manager parse: preamble metadata + locale dates."""
     text = path.read_text(encoding="utf-8-sig")
     currency = account = None
     for line in text.splitlines()[:8]:                            # preamble metadata
@@ -133,7 +175,29 @@ def read_linkedin_export(path, mappings=None) -> pd.DataFrame:
         "conversions": _num(df["Conversions"]),
         "platform_revenue": float("nan"),
     })
-    return schema.to_canonical(out, LINKEDIN, mappings, currency=currency)
+    # LinkedIn's hierarchy is Campaign -> Creative (no ad-set tier); a creative report's
+    # Creative Name is the sub-campaign entity, so it lands in ad_group like the others.
+    if "Creative Name" in df.columns:
+        out = _with_decoded(out, df["Creative Name"])
+    return out, currency
+
+
+def read_linkedin_export(path, mappings=None) -> pd.DataFrame:
+    path = Path(path)
+    out, currency = _linkedin_frame(path)
+    return schema.to_canonical(out, LINKEDIN, mappings or load_mappings(),
+                               currency=currency)
+
+
+def read_linkedin_creative_export(path, mappings=None) -> pd.DataFrame:
+    """LinkedIn *creative* performance report: campaign-report quirks + Creative Name."""
+    path = Path(path)
+    out, currency = _linkedin_frame(path)
+    if "ad_group" not in out.columns:
+        raise schema.SchemaError(
+            f"{path.name}: creative report without a 'Creative Name' column")
+    return schema.to_canonical(out, LINKEDIN, mappings or load_mappings(),
+                               currency=currency)
 
 
 def _ga4_channel(source_medium: pd.Series, campaign: pd.Series, mappings: dict) -> pd.Series:
@@ -172,8 +236,18 @@ def read_ga4_export(path, mappings=None) -> pd.DataFrame:
     return schema.to_canonical(out, GA4, mappings)
 
 
-_READERS = {GOOGLE: read_google_ads_export, META: read_meta_export,
-            LINKEDIN: read_linkedin_export, GA4: read_ga4_export}
+# format key -> (store source name, reader). Ad-level formats share their platform's
+# source so campaign- and ad-level pulls meet in one folder and the store's supersede
+# step can reconcile the two grains.
+_READERS = {
+    GOOGLE: (GOOGLE, read_google_ads_export),
+    GOOGLE_ADGROUPS: (GOOGLE, read_google_adgroup_export),
+    META: (META, read_meta_export),
+    META_ADSETS: (META, read_meta_export),
+    LINKEDIN: (LINKEDIN, read_linkedin_export),
+    LINKEDIN_CREATIVES: (LINKEDIN, read_linkedin_creative_export),
+    GA4: (GA4, read_ga4_export),
+}
 
 
 def read_export(path, mappings=None) -> tuple[str, pd.DataFrame]:
@@ -187,4 +261,5 @@ def read_export(path, mappings=None) -> tuple[str, pd.DataFrame]:
         raise schema.SchemaError(
             f"{Path(path).name}: unrecognized export format — expected a Google Ads / "
             "Meta / LinkedIn / GA4 export (see data/inbox/README.md)")
-    return fmt, _READERS[fmt](path, mappings)
+    source, reader = _READERS[fmt]
+    return source, reader(path, mappings)
