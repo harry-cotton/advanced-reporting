@@ -92,13 +92,38 @@ When Claude proposes edits, you get a **side-by-side diff** to accept, reject, o
 Handy input tricks: **@-mention** files/folders (`@src/advanced_reporting/mmm/`), select code
 and press **Alt+K** to insert a line-range reference, and **Shift+Enter** for a newline.
 
-## 9. Optional: the standalone CLI
+## 9. Get the project itself running (fresh machine)
+
+`data/` and `outputs/` are **gitignored** — a fresh clone has no store and an empty
+dashboard until you regenerate them. Everything is seeded/deterministic, so a new machine
+reproduces the exact same numbers.
+
+```powershell
+# one-time: install uv (Python env manager), then from the repo root:
+winget install astral-sh.uv
+uv sync                                    # creates .venv on the pinned Python 3.12 (uv.lock)
+
+# regenerate the MBA demo data end-to-end:
+.\.venv\Scripts\python.exe scripts\generate_sample_exports.py       # 7 export fixtures -> data/inbox/
+.\.venv\Scripts\python.exe scripts\ingest.py --inbox                 # inbox -> durable store
+.\.venv\Scripts\python.exe scripts\run_pipeline.py --sources "google_ads,meta_ads,linkedin_ads,ga4" --no-mmm
+
+# verify + launch:
+.\.venv\Scripts\python.exe -m pytest -q                              # expect all green
+.\.venv\Scripts\streamlit.exe run src\advanced_reporting\dashboard\app.py
+```
+
+(For the synthetic-MMM flow instead: `generate_sample_data.py` → `ingest.py --source
+synthetic` → `run_pipeline.py` with no flags.) `.env` / `config/config.yaml` are optional —
+only the guarded LLM paths need a key; nothing above requires one.
+
+## 10. Optional: the standalone CLI
 
 The extension bundles its own engine for the chat panel. A few features (e.g. `claude mcp add`,
 git worktrees) need the **standalone CLI** so you can run `claude` in the integrated terminal.
 Install it from the Claude Code setup docs (Sources) only if/when you need those.
 
-## 10. Optional: connectors & plugins
+## 11. Optional: connectors & plugins
 
 - **Plugins**: type `/plugins` in the prompt box to browse/install (e.g. a marketing pack).
 - **MCP servers** (live data like Supermetrics later): add via the integrated terminal with
