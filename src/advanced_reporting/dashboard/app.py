@@ -25,6 +25,7 @@ st.set_page_config(page_title="Advanced Reporting — Overview", layout="wide")
 theme.inject_css()
 
 metrics_f = ROOT / "data" / "processed" / "channel_weekly_metrics.csv"
+history_f = ROOT / "data" / "processed" / "history.parquet"
 if not metrics_f.exists():
     st.title("Advanced Reporting")
     st.warning("No processed data yet. Run `python scripts/run_pipeline.py` first.")
@@ -36,7 +37,13 @@ def _load_weekly(path: str, mtime: float) -> pd.DataFrame:
     return pd.read_csv(path, parse_dates=["date"])
 
 
+@st.cache_data
+def _load_hist(path: str, mtime: float) -> pd.DataFrame:
+    return pd.read_parquet(path)
+
+
 weekly = _load_weekly(str(metrics_f), metrics_f.stat().st_mtime)
+hist = _load_hist(str(history_f), history_f.stat().st_mtime) if history_f.exists() else None
 cfg = load_config()
 rep = cfg.get("reporting", {}) or {}
 kpi_label = rep.get("kpi_label", "key events")
@@ -53,9 +60,11 @@ st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every 
 tiles = insights.headline_tiles(weekly, kpi_label)
 cols = st.columns(len(tiles))
 for col, t in zip(cols, tiles):
-    col.metric(t["label"], t["value"], delta=t["delta"],
-               delta_color=t["delta_color"], help=t["help"])
+    with col:
+        theme.metric_card(t["label"], t["value"], delta=t["delta"],
+                          delta_color=t["delta_color"], help=t.get("help"))
 st.divider()
+theme.lede(insights.topline_summary(weekly, kpi_label))
 
 
 def _narrow():
@@ -122,7 +131,31 @@ if b:
         theme.prose(b["narrative"])
     st.divider()
 
-# --- block 4: pacing + where the money goes -----------------------------------------
+# --- block 4: audience callout (requires history.parquet with decoded ad-level rows) --
+if hist is not None:
+    b = insights.audience_callout_insight(hist)
+    if b:
+        with _narrow():
+            theme.action_title(b["title"])
+            per = b["per_audience"].head(6)
+            labels = [f"{r['audience_type']} · {r['audience_detail']}"
+                      for _, r in per.iterrows()]
+            colors = [theme.ACCENT if r["audience_type"] == "PROSPECT" else theme.CLAIMED
+                      for _, r in per.iterrows()]
+            fig = go.Figure(go.Bar(
+                y=labels[::-1], x=per["cost_per_claimed"].tolist()[::-1],
+                orientation="h", marker_color=colors[::-1],
+                text=[insights._money(v) for v in per["cost_per_claimed"]][::-1],
+                textposition="outside"))
+            theme.plotly_chart(fig, xfmt="currency",
+                               height=80 + 44 * len(per), legend=False)
+            st.caption("Platform-claimed conversions per audience, "
+                       "decoded from ad-set names. Blue = prospecting, "
+                       "amber = retargeting.")
+            theme.prose(b["narrative"])
+        st.divider()
+
+# --- block 5: pacing + where the money goes -----------------------------------------
 b = insights.pacing_insight(weekly, budget_cfg)
 if b:
     with _narrow():

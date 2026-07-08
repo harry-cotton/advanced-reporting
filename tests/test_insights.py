@@ -88,6 +88,71 @@ def test_pacing_verdicts(total, expected):
     assert expected.split()[0] in b["title"]
 
 
+def _hist_with_audiences() -> pd.DataFrame:
+    """Minimal history stand-in: 2 decoded audience rows per week across 4 weeks."""
+    dates = pd.date_range("2026-01-05", periods=4, freq="W-MON")
+    rows = []
+    for d in dates:
+        rows.append({"date": d, "channel": "meta",
+                     "campaign": "US_META_CONVERT_PROSPECT",
+                     "ad_group": "PROSPECT_LAL-1PCT_FEED",
+                     "audience_type": "PROSPECT", "audience_detail": "LAL-1PCT",
+                     "creative": "", "creative_format": "",
+                     "spend": 500.0, "conversions": 25.0})
+        rows.append({"date": d, "channel": "meta",
+                     "campaign": "US_META_CONVERT_RETARGET",
+                     "ad_group": "RETARGET_SITE-90D_FEED",
+                     "audience_type": "RETARGET", "audience_detail": "SITE-90D",
+                     "creative": "", "creative_format": "",
+                     "spend": 500.0, "conversions": 5.0})
+    return pd.DataFrame(rows)
+
+
+def test_topline_summary_with_measured():
+    s = insights.topline_summary(_weekly(), "start applications")
+    assert "$16" in s                           # total spend (format: $16.0k or $16,000)
+    assert "start applications" in s
+    assert "Meta" in s and "LinkedIn" in s      # efficiency gap named
+    assert "×" in s                        # claim ratio × present
+
+
+def test_topline_summary_degrades_to_claimed():
+    s = insights.topline_summary(_weekly(measured=False))
+    assert "platform-claimed" in s
+    assert "×" not in s                         # no claim ratio without measured
+
+
+def test_audience_callout_best_worst():
+    hist = _hist_with_audiences()
+    b = insights.audience_callout_insight(hist)
+    assert b is not None
+    # PROSPECT·LAL-1PCT: cost=20, RETARGET·SITE-90D: cost=100 → mult=5
+    assert b["mult"] == pytest.approx(5.0, abs=0.01)
+    assert b["best"]["audience_type"] == "PROSPECT"
+    assert b["worst"]["audience_type"] == "RETARGET"
+    assert "5.0×" in b["title"]
+    assert "platform-claimed" in b["narrative"].lower()
+
+
+def test_audience_callout_returns_none_without_ad_level():
+    # campaign-level rows (ad_group == "") → None
+    hist = _hist_with_audiences().copy()
+    hist["ad_group"] = ""
+    assert insights.audience_callout_insight(hist) is None
+
+
+def test_audience_callout_returns_none_for_unparsed_only():
+    hist = _hist_with_audiences().copy()
+    hist["audience_type"] = "(unparsed)"
+    assert insights.audience_callout_insight(hist) is None
+
+
+def test_audience_callout_returns_none_without_column():
+    # hist without ad_group column at all (pre-v5 store)
+    hist = _hist_with_audiences().drop(columns=["ad_group"])
+    assert insights.audience_callout_insight(hist) is None
+
+
 def test_macro_context_stays_hidden(tmp_path):
     assert insights.macro_context({}) is None
     assert insights.macro_context(

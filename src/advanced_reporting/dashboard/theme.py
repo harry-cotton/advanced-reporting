@@ -95,6 +95,54 @@ def prose(text: str) -> None:
     st.markdown(_escape_math(text))
 
 
+def metric_card(label: str, value: str, delta: str | None = None,
+                delta_color: str = "normal", help: str | None = None) -> None:
+    """Styled KPI card: border, large bold value, colored delta with arrow.
+
+    ``delta_color``: "normal" (up=green), "inverse" (up=red, for cost metrics),
+    "off" (neutral, no arrow).
+    """
+    delta_html = ""
+    if delta:
+        pos = delta.startswith("+")
+        neg = delta.startswith("-")
+        if delta_color == "off":
+            color, arrow = INK_SOFT, ""
+        elif delta_color == "inverse":
+            color = POSITIVE if neg else (NEGATIVE if pos else INK_SOFT)
+            arrow = "▼ " if neg else ("▲ " if pos else "")
+        else:
+            color = POSITIVE if pos else (NEGATIVE if neg else INK_SOFT)
+            arrow = "▲ " if pos else ("▼ " if neg else "")
+        delta_html = (f'<div style="font-family:{SANS};font-size:0.82rem;'
+                      f'color:{color};margin-top:0.3rem">'
+                      f'{arrow}{_escape_math(delta)}</div>')
+
+    tooltip = f' title="{help}"' if help else ""
+    st.markdown(
+        f'<div{tooltip} style="background:{PAPER};border:1px solid {GRID};'
+        f'border-radius:8px;padding:1.1rem 1.25rem">'
+        f'<div style="font-family:{SANS};font-size:0.78rem;font-weight:600;'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:{INK_SOFT};'
+        f'margin-bottom:0.35rem">{label}</div>'
+        f'<div style="font-family:{SANS};font-size:1.9rem;font-weight:700;'
+        f'line-height:1.1;color:{INK}">{_escape_math(value)}</div>'
+        f'{delta_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def lede(text: str) -> None:
+    """Leadership abstract: serif, accent left-border, sits above the insight blocks."""
+    st.markdown(
+        f'<div style="font-family:{SERIF};font-size:1.1rem;line-height:1.65;'
+        f'color:{INK};border-left:3px solid {ACCENT};'
+        f'padding:0.5rem 0 0.5rem 1rem;margin:0.25rem 0 0.75rem 0">'
+        f'{_escape_math(text)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ---------------------------------------------------------------- the chart standard
 def style_fig(fig: go.Figure, *, yfmt: str | None = None, xfmt: str | None = None,
               height: int = 380, legend: bool = True) -> go.Figure:

@@ -311,6 +311,103 @@ def pacing_insight(weekly: pd.DataFrame, budget: dict | None = None) -> dict | N
     return out
 
 
+# ---------------------------------------------------------------- topline summary
+def topline_summary(weekly: pd.DataFrame, kpi_label: str = "key events") -> str:
+    """1–3 sentence leadership abstract: spend, outcome trend, top efficiency gap.
+
+    Always returns a non-empty string. Degrades to claimed conversions (honestly
+    labeled) when no analytics-measured series exists.
+    """
+    measured = _has_measured(weekly)
+    col = "key_events" if measured else "conversions"
+    label = kpi_label if measured else "platform-claimed conversions"
+
+    paid_channels = _paid_channels(weekly)
+    paid = weekly[weekly["channel"].isin(paid_channels)]
+    total_spend = float(paid["spend"].sum())
+    total_out = float(paid[col].sum(min_count=1)) if col in paid.columns else 0.0
+    n_ch = len(paid_channels)
+    ch_word = f"{n_ch} channel{'s' if n_ch != 1 else ''}"
+
+    pct = float("nan")
+    if total_out > 0:
+        pct = _recent_vs_prior(paid.groupby("date")[col].sum(min_count=1).sort_index())
+
+    s1 = (f"Paid media spent **{_money(total_spend)}** and delivered "
+          f"**{total_out:,.0f} {label}** across {ch_word}"
+          + (f", {_trend_phrase(pct)} month-on-month" if not pd.isna(pct) else "")
+          + ".")
+
+    s2 = ""
+    eff = cost_per_outcome_insight(weekly, kpi_label)
+    if eff and len(eff["per_channel"]) >= 2:
+        cheap, dear = eff["per_channel"].iloc[0], eff["per_channel"].iloc[-1]
+        s2 = (f" **{channel_label(cheap['channel'])}** leads on efficiency at "
+              f"**{_money(cheap['cost_per'])}** per {eff['outcome_label']}, "
+              f"with **{channel_label(dear['channel'])}** at "
+              f"**{_money(dear['cost_per'])}**.")
+
+    s3 = ""
+    if measured and "conversions" in weekly.columns:
+        claimed = float(paid["conversions"].sum())
+        if claimed > 0 and total_out > 0:
+            ratio = claimed / total_out
+            s3 = (f" The platforms claim **{ratio:.1f}×** more conversions than "
+                  f"analytics can verify — the **{kpi_label}** figures are "
+                  "the consistent yardstick throughout this report.")
+
+    return s1 + s2 + s3
+
+
+# ---------------------------------------------------------------- audience callout
+def audience_callout_insight(hist: pd.DataFrame) -> dict | None:
+    """Best-vs-worst audience efficiency callout for the Overview page.
+
+    Reads history.parquet (ad-level, decoded rows only). Returns None when no
+    decoded audience rows exist. All conversions are platform-claimed.
+    """
+    if "ad_group" not in hist.columns or "audience_type" not in hist.columns:
+        return None
+    from ..ingestion.naming_decode import UNPARSED
+    ad = hist[
+        (hist["ad_group"] != "")
+        & (hist["audience_type"] != "")
+        & (hist["audience_type"] != UNPARSED)
+    ]
+    if ad.empty:
+        return None
+    per = (
+        ad.groupby(["audience_type", "audience_detail"])[["spend", "conversions"]]
+        .sum(min_count=1)
+        .dropna()
+        .reset_index()
+    )
+    per = per[(per["conversions"] > 0) & (per["spend"] > 0)].copy()
+    if len(per) < 2:
+        return None
+    per["cost_per_claimed"] = per["spend"] / per["conversions"]
+    per = per.sort_values("cost_per_claimed").reset_index(drop=True)
+
+    best, worst = per.iloc[0], per.iloc[-1]
+    mult = worst["cost_per_claimed"] / best["cost_per_claimed"]
+
+    title = (f"{best['audience_type']} · {best['audience_detail']} converts at "
+             f"{mult:.1f}× less cost than "
+             f"{worst['audience_type']} · {worst['audience_detail']}")
+    narrative = (
+        f"At the audience level, **{best['audience_type']} · {best['audience_detail']}** "
+        f"delivers claimed conversions at **{_money(best['cost_per_claimed'])}** each — "
+        f"**{mult:.1f}×** more efficient than "
+        f"**{worst['audience_type']} · {worst['audience_detail']}** "
+        f"at {_money(worst['cost_per_claimed'])}. "
+        "_All audience figures are platform-claimed; the Audiences page has the full ranking._"
+    )
+    return {
+        "title": title, "narrative": narrative, "per_audience": per,
+        "best": best.to_dict(), "worst": worst.to_dict(), "mult": mult,
+    }
+
+
 # ---------------------------------------------------------------- macro slot (hidden)
 def macro_context(cfg: dict | None) -> list[str] | None:
     """The DEFERRED "External context" aside: curated per-client notes only.
