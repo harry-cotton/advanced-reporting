@@ -105,3 +105,35 @@ def test_goal_inference_tokenized():
     assert M.resolve_goal("midwest sales retargeting recap") == "conversion"
     # stems still work at token starts
     assert M.resolve_goal("Prospecting_Broad_Q3") == "awareness"
+
+
+# --- focus_metric detection ---------------------------------------------------------
+
+def test_focus_clicks_from_click_word():
+    assert L.parse_lens("break down click performance", use_llm=False).focus_metric == "clicks"
+
+
+def test_focus_clicks_from_ctr():
+    assert L.parse_lens("how is the CTR looking", use_llm=False).focus_metric == "clicks"
+
+
+def test_focus_spend_from_budget():
+    assert L.parse_lens("where is my budget going", use_llm=False).focus_metric == "spend"
+
+
+def test_focus_impressions():
+    assert L.parse_lens("show impressions by channel", use_llm=False).focus_metric == "impressions"
+
+
+def test_focus_roas():
+    assert L.parse_lens("what is the ROAS", use_llm=False).focus_metric == "roas"
+
+
+def test_focus_none_for_generic_query():
+    assert L.parse_lens("awareness campaign on Meta", use_llm=False).focus_metric is None
+
+
+def test_focus_does_not_disturb_goal_and_channels():
+    s = L.parse_lens("break down clicks for meta", use_llm=False)
+    assert s.focus_metric == "clicks"
+    assert s.channels == ["meta"]

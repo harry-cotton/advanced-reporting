@@ -42,7 +42,12 @@ weekly = _load(str(metrics_f), metrics_f.stat().st_mtime)
 hist = _load(str(history_f), history_f.stat().st_mtime)
 
 paid = insights._paid_channels(weekly)
-sel = st.sidebar.multiselect("Channels", paid, default=paid)
+_ls = st.session_state.get("lens_spec")
+_default_ch = ([c for c in _ls.channels if c in paid]
+               if _ls and _ls.channels else paid)
+sel = st.sidebar.multiselect("Channels", paid, default=_default_ch)
+if _ls and _ls.channels and _ls.source_text:
+    st.sidebar.caption(f'From Overview query: "{_ls.source_text}"')
 weekly = weekly[weekly["channel"].isin(sel)]
 hist = hist[hist["channel"].isin(sel)]
 if weekly.empty:

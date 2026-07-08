@@ -27,6 +27,26 @@ class ReportSpec:
     channels: list | None = None  # None = all channels
     tone: str = "standard"        # standard | executive | detailed
     source_text: str = ""
+    focus_metric: str | None = None  # clicks|impressions|spend|conversions|roas|engagement
+
+
+# Maps a focus_metric slug to the keyword signals that trigger it.
+# phrase_in() is word-boundary-aware, so include both singular and plural explicitly.
+_FOCUS_PATTERNS: dict = {
+    "clicks":      ["click", "clicks", "ctr"],
+    "impressions": ["impression", "impressions", "impr", "cpm"],
+    "spend":       ["spend", "budget", "investment"],
+    "conversions": ["conversion", "conversions", "leads", "cpa"],
+    "roas":        ["roas"],
+    "engagement":  ["session", "sessions", "engaged"],
+}
+
+
+def _detect_focus_metric(text: str) -> str | None:
+    for metric, patterns in _FOCUS_PATTERNS.items():
+        if any(phrase_in(text, p) for p in patterns):
+            return metric
+    return None
 
 
 _TONE_PATTERNS = {
@@ -152,7 +172,8 @@ def parse_lens(text, *, goals=None, registry=None, config=None, mappings=None,
     known = list((config.get("modeling") or {}).get("channel_spend_cols", []))
     channels = _detect_channels(text, known, mappings.get("channel_aliases", {}))
     spec = ReportSpec(goal=goal, primary_tier=tier, metrics=select_metrics(tier, registry),
-                      channels=channels, tone=_detect_tone(text), source_text=text)
+                      channels=channels, tone=_detect_tone(text), source_text=text,
+                      focus_metric=_detect_focus_metric(text))
     return _validate(spec, goals, registry)
 
 

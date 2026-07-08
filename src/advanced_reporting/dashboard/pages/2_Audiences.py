@@ -38,6 +38,10 @@ def _load(path: str, mtime: float) -> pd.DataFrame:
 
 
 hist = _load(str(history_f), history_f.stat().st_mtime)
+_ls = st.session_state.get("lens_spec")
+if _ls and _ls.channels:
+    hist = hist[hist["channel"].isin(_ls.channels)]
+    st.caption(f'Filtered from Overview query: "{_ls.source_text}"')
 aud = drilldown.audience_summary(hist)
 if aud.empty:
     st.info("No audience-decoded rows in the store yet — drop ad-set/ad-group exports "

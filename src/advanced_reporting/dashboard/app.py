@@ -19,6 +19,7 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.dashboard import insights, theme  # noqa: E402
+from advanced_reporting.reporting import lens as L  # noqa: E402
 from advanced_reporting.utils import load_config  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Overview", layout="wide")
@@ -42,6 +43,11 @@ def _load_hist(path: str, mtime: float) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+@st.cache_data
+def _parse_lens_cached(text: str) -> L.ReportSpec:
+    return L.parse_lens(text, use_llm=False)
+
+
 weekly = _load_weekly(str(metrics_f), metrics_f.stat().st_mtime)
 hist = _load_hist(str(history_f), history_f.stat().st_mtime) if history_f.exists() else None
 cfg = load_config()
@@ -55,6 +61,18 @@ lo, hi = weekly["date"].min(), weekly["date"].max()
 n_paid = len(insights._paid_channels(weekly))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
            "below is computed from the weekly tables — no generated commentary.")
+
+# --- query bar ------------------------------------------------------------------
+_query = st.sidebar.text_input(
+    "Ask about this campaign",
+    placeholder="e.g. break down click performance",
+    help="Keyword parser — reshapes this page and filters sub-pages. No API key needed.")
+if _query.strip():
+    _lens_spec = _parse_lens_cached(_query.strip())
+    st.session_state["lens_spec"] = _lens_spec
+else:
+    _lens_spec = None
+    st.session_state.pop("lens_spec", None)
 
 # --- executive tile row ------------------------------------------------------------
 tiles = insights.headline_tiles(weekly, kpi_label)
@@ -72,6 +90,180 @@ def _narrow():
     left, _ = st.columns([7, 2])
     return left
 
+
+def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) -> None:
+    """Dynamic 2-column block driven by the query's focus_metric."""
+    fm = spec.focus_metric
+    if fm is None:
+        return
+    scoped = wk if spec.channels is None else wk[wk["channel"].isin(spec.channels)]
+    channels = insights._paid_channels(scoped)
+    per_ch = scoped.groupby("channel")
+
+    _labels = {
+        "clicks": "Click performance",
+        "impressions": "Impression performance",
+        "spend": "Spend breakdown",
+        "conversions": "Conversion performance",
+        "roas": "Revenue & ROAS",
+        "engagement": "Engagement performance",
+    }
+    theme.action_title(_labels.get(fm, fm.capitalize()))
+    left, right = st.columns([2, 1])
+
+    if fm == "clicks":
+        with left:
+            ts = scoped.groupby(["date", "channel"], as_index=False)["clicks"].sum().sort_values("date")
+            fig = go.Figure()
+            for i, ch in enumerate(channels):
+                g = ts[ts["channel"] == ch]
+                fig.add_scatter(x=g["date"], y=g["clicks"], name=theme.channel_label(ch),
+                                mode="lines", stackgroup="clicks",
+                                line=dict(color=theme.channel_color(ch, i), width=2))
+            theme.plotly_chart(fig, yfmt="count", height=300)
+        with right:
+            ctr = per_ch.agg(clicks=("clicks", "sum"),
+                             impressions=("impressions", "sum")).reset_index()
+            ctr["ctr"] = ctr["clicks"] / ctr["impressions"].replace(0, float("nan"))
+            ctr = ctr.dropna(subset=["ctr"]).sort_values("ctr", ascending=True)
+            fig = go.Figure(go.Bar(
+                y=[theme.channel_label(c) for c in ctr["channel"]],
+                x=ctr["ctr"], orientation="h",
+                marker_color=[theme.channel_color(c, i) for i, c in enumerate(ctr["channel"])],
+                text=[f"{v * 100:.2f}%" for v in ctr["ctr"]], textposition="outside"))
+            theme.plotly_chart(fig, xfmt="pct", height=300, legend=False)
+            st.caption("CTR = clicks / impressions by channel.")
+
+    elif fm == "impressions":
+        with left:
+            ts = scoped.groupby(["date", "channel"], as_index=False)["impressions"].sum().sort_values("date")
+            fig = go.Figure()
+            for i, ch in enumerate(channels):
+                g = ts[ts["channel"] == ch]
+                fig.add_scatter(x=g["date"], y=g["impressions"], name=theme.channel_label(ch),
+                                mode="lines", stackgroup="impr",
+                                line=dict(color=theme.channel_color(ch, i), width=2))
+            theme.plotly_chart(fig, yfmt="count", height=300)
+        with right:
+            cpm = per_ch.agg(spend=("spend", "sum"),
+                             impressions=("impressions", "sum")).reset_index()
+            cpm["cpm"] = cpm["spend"] / cpm["impressions"].replace(0, float("nan")) * 1000
+            cpm = cpm.dropna(subset=["cpm"]).sort_values("cpm", ascending=True)
+            fig = go.Figure(go.Bar(
+                y=[theme.channel_label(c) for c in cpm["channel"]],
+                x=cpm["cpm"], orientation="h",
+                marker_color=[theme.channel_color(c, i) for i, c in enumerate(cpm["channel"])],
+                text=[f"${v:.2f}" for v in cpm["cpm"]], textposition="outside"))
+            theme.plotly_chart(fig, xfmt="currency", height=300, legend=False)
+            st.caption("CPM = cost per 1,000 impressions by channel.")
+
+    elif fm == "spend":
+        with left:
+            ts = scoped.groupby(["date", "channel"], as_index=False)["spend"].sum().sort_values("date")
+            fig = go.Figure()
+            for i, ch in enumerate(channels):
+                g = ts[ts["channel"] == ch]
+                fig.add_scatter(x=g["date"], y=g["spend"], name=theme.channel_label(ch),
+                                mode="lines", stackgroup="spend",
+                                line=dict(color=theme.channel_color(ch, i), width=2))
+            theme.plotly_chart(fig, yfmt="currency", height=300)
+        with right:
+            mix = insights.spend_mix(scoped)
+            fig = go.Figure(go.Pie(
+                labels=[theme.channel_label(c) for c in mix["channel"]],
+                values=mix["spend"], hole=0.62, sort=False,
+                marker=dict(colors=[theme.channel_color(c, i)
+                                    for i, c in enumerate(mix["channel"])]),
+                textinfo="percent", textfont=dict(size=12)))
+            fig.update_layout(annotations=[dict(text="Spend<br>mix", showarrow=False,
+                              font=dict(family=theme.SANS, size=14, color=theme.INK_SOFT))])
+            theme.plotly_chart(fig, height=300, legend=False)
+
+    elif fm == "conversions":
+        b_cv = insights.claims_vs_measured_insight(scoped, kpi_label)
+        b_cp = insights.cost_per_outcome_insight(scoped, kpi_label)
+        with left:
+            if b_cv:
+                per = b_cv["per_channel"]
+                labels = [theme.channel_label(c) for c in per["channel"]]
+                fig = go.Figure()
+                fig.add_bar(x=labels, y=per["claimed"], name="Platform-claimed",
+                            marker_color=theme.CLAIMED,
+                            text=[f"{r:.1f}x" for r in per["ratio"]], textposition="outside")
+                fig.add_bar(x=labels, y=per["measured"], name="Analytics-measured",
+                            marker_color=theme.MEASURED)
+                fig.update_layout(barmode="group")
+                theme.plotly_chart(fig, yfmt="count", height=300)
+        with right:
+            if b_cp:
+                per = b_cp["per_channel"].sort_values("cost_per", ascending=True)
+                fig = go.Figure(go.Bar(
+                    y=[theme.channel_label(c) for c in per["channel"]],
+                    x=per["cost_per"], orientation="h",
+                    marker_color=[theme.channel_color(c, i) for i, c in enumerate(per["channel"])],
+                    text=[insights._money(v) for v in per["cost_per"]], textposition="outside"))
+                fig.update_layout(showlegend=False)
+                theme.plotly_chart(fig, xfmt="currency", height=300, legend=False)
+                cap = ("per analytics-measured outcome" if b_cp["measured"]
+                       else "per platform-claimed conversion")
+                st.caption(f"Cost {cap}.")
+
+    elif fm == "roas":
+        per = per_ch.agg(spend=("spend", "sum"),
+                         revenue=("platform_revenue", "sum")).reset_index()
+        per["roas"] = per["revenue"] / per["spend"].replace(0, float("nan"))
+        per = per.dropna(subset=["roas"]).sort_values("roas", ascending=False)
+        labels = [theme.channel_label(c) for c in per["channel"]]
+        with left:
+            fig = go.Figure()
+            fig.add_bar(x=labels, y=per["spend"], name="Spend",
+                        marker_color=theme.CLAIMED)
+            fig.add_bar(x=labels, y=per["revenue"], name="Platform revenue",
+                        marker_color=theme.MEASURED)
+            fig.update_layout(barmode="group")
+            theme.plotly_chart(fig, yfmt="currency", height=300)
+        with right:
+            fig = go.Figure(go.Bar(
+                y=labels[::-1], x=per["roas"].tolist()[::-1], orientation="h",
+                marker_color=[theme.channel_color(c, i)
+                              for i, c in enumerate(per["channel"])][::-1],
+                text=[f"{v:.2f}x" for v in per["roas"].tolist()[::-1]],
+                textposition="outside"))
+            theme.plotly_chart(fig, xfmt="count", height=300, legend=False)
+            st.caption("Blended ROAS = platform-attributed revenue / spend.")
+
+    elif fm == "engagement":
+        if "sessions" in scoped.columns and scoped["sessions"].notna().any():
+            with left:
+                ts = scoped.groupby(["date", "channel"], as_index=False)["sessions"].sum().sort_values("date")
+                fig = go.Figure()
+                for i, ch in enumerate(channels):
+                    g = ts[ts["channel"] == ch]
+                    fig.add_scatter(x=g["date"], y=g["sessions"], name=theme.channel_label(ch),
+                                    mode="lines", stackgroup="sess",
+                                    line=dict(color=theme.channel_color(ch, i), width=2))
+                theme.plotly_chart(fig, yfmt="count", height=300)
+            with right:
+                eng = per_ch.agg(sessions=("sessions", "sum"),
+                                 engaged=("engaged_sessions", "sum")).reset_index()
+                eng["eng_rate"] = eng["engaged"] / eng["sessions"].replace(0, float("nan"))
+                eng = eng.dropna(subset=["eng_rate"]).sort_values("eng_rate", ascending=True)
+                fig = go.Figure(go.Bar(
+                    y=[theme.channel_label(c) for c in eng["channel"]],
+                    x=eng["eng_rate"], orientation="h",
+                    marker_color=[theme.channel_color(c, i) for i, c in enumerate(eng["channel"])],
+                    text=[f"{v * 100:.1f}%" for v in eng["eng_rate"]], textposition="outside"))
+                theme.plotly_chart(fig, xfmt="pct", height=300, legend=False)
+                st.caption("Engagement rate = engaged sessions / total sessions (GA4).")
+        else:
+            st.info("Sessions data isn't in the processed metrics yet. "
+                    "Re-run the pipeline after GA4 engagement columns are populated.")
+    st.divider()
+
+
+# --- focus block (rendered when the query bar detects a focus_metric) --------------
+if _lens_spec is not None:
+    _render_focus_block(_lens_spec, weekly, kpi_label)
 
 # --- block 1: headline KPI + trend ------------------------------------------------
 b = insights.kpi_trend_insight(weekly, kpi_label)
