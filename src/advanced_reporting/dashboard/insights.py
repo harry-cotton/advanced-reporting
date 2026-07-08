@@ -12,8 +12,12 @@ Pure pandas in/out so the whole narrative layer is unit-testable without Streaml
 """
 from __future__ import annotations
 
+import math
+
+import numpy as np
 import pandas as pd
 
+from ..reporting import metrics as M
 from ..reporting.metrics import format_value as _fmt
 
 NONPAID_LABEL = "Organic & direct"
@@ -133,6 +137,123 @@ def spend_mix(weekly: pd.DataFrame) -> pd.DataFrame:
     out = per.reset_index()
     out["share"] = out["spend"] / out["spend"].sum()
     return out
+
+
+# ---------------------------------------------------------------- tier scorecard (gauges)
+# The Awareness/Engagement/Action framing from the Power BI dashboard, mapped onto the
+# KPI-pyramid tiers (reach/intent/outcome). Each tier gets a small strip of goal gauges:
+# VOLUME metrics pace toward a configured goal (or fall to the totals grid when none is
+# set); EFFICIENCY/QUALITY metrics get a RAG bullet graded against configured thresholds
+# — or, absent thresholds, against the channel spread (honestly labeled, never a faked
+# absolute target). Pure pandas: computed off metrics.compute_metrics, unit-testable.
+TIER_LABELS = {"reach": "Awareness", "intent": "Engagement", "outcome": "Action"}
+
+# Per tier: metrics shown as graded RAG bullets vs the volumes shown as pacing/totals.
+_TIER_RAG = {
+    "reach": ["cpm", "cpc", "ctr"],
+    "intent": ["cost_per_session", "engagement_rate", "pages_per_session"],
+    "outcome": ["cost_per_key_event", "roas", "conversion_rate"],
+}
+_TIER_VOLUME = {
+    "reach": ["impressions", "clicks"],
+    "intent": ["sessions", "video_views"],
+    "outcome": ["key_events", "revenue"],
+}
+
+
+def _rag_gauge(value: float, higher_is_better: bool, good: float | None = None,
+               warn: float | None = None, sample: list[float] | None = None) -> dict | None:
+    """Place ``value`` on a good/amber/bad track, returning marker pos + band stops.
+
+    Absolute mode when both ``good``/``warn`` thresholds are given; otherwise a relative
+    mode deriving the bands from the 33rd/66th percentiles of ``sample`` (the per-channel
+    values). Returns None if the value is NaN, or relative mode lacks ≥2 sample points.
+    """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    mode = "absolute" if (good is not None and warn is not None) else "relative"
+    if mode == "relative":
+        s = [float(v) for v in (sample or []) if v is not None and not pd.isna(v)]
+        if len(s) < 2:
+            return None
+        lo, hi = float(np.percentile(s, 33)), float(np.percentile(s, 66))
+        warn, good = (lo, hi) if higher_is_better else (hi, lo)  # good is the "nice" end
+
+    if higher_is_better:                       # high = good; bad → warn → good, L→R
+        scale = max(value, good, warn) * 1.15 or 1.0
+        w0, g0 = warn / scale, good / scale
+        band_stops = [(0.0, w0, "bad"), (w0, g0, "warn"), (g0, 1.0, "good")]
+        verdict = "good" if value >= good else ("warn" if value >= warn else "bad")
+    else:                                      # low = good (cost); good → warn → bad, L→R
+        scale = max(value, good, warn) * 1.35 or 1.0
+        g0, w0 = good / scale, warn / scale
+        band_stops = [(0.0, g0, "good"), (g0, w0, "warn"), (w0, 1.0, "bad")]
+        verdict = "good" if value <= good else ("warn" if value <= warn else "bad")
+    return {"pos": min(max(value / scale, 0.0), 1.0), "band_stops": band_stops,
+            "verdict": verdict, "mode": mode}
+
+
+def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
+                   kpi_label: str = "key events") -> dict:
+    """Goal-gauge scorecard for one pyramid tier (the Awareness/Engagement/Action band).
+
+    Returns ``{tier, label, pace[], rag[], grid[], measured, relative_bands}``:
+    ``pace`` = pacing bullets (volume metrics with a configured goal), ``rag`` = graded
+    efficiency/quality bullets, ``grid`` = the totals card (Spend + un-goaled volumes).
+    """
+    targets = targets or {}
+    reg = M.load_metric_registry()
+    nat = {r["metric"]: r for r in M.compute_metrics(weekly, by=None, registry=reg)
+           .to_dict("records")}
+    paid = weekly[weekly["channel"].isin(_paid_channels(weekly))]
+    per = (M.compute_metrics(paid, by="channel", registry=reg)
+           if not paid.empty else None)
+
+    rag_keys = list(_TIER_RAG.get(tier, []))
+    vol_keys = list(_TIER_VOLUME.get(tier, []))
+    measured = _has_measured(weekly)
+    if tier == "outcome" and not measured:     # no GA4 series → fall back to claimed/CPA
+        rag_keys = ["cpa" if k == "cost_per_key_event" else k for k in rag_keys]
+        vol_keys = ["conversions" if k == "key_events" else k for k in vol_keys]
+
+    rag = []
+    for key in rag_keys:
+        rec = nat.get(key)
+        # An exact 0 here means the underlying column is unpopulated (e.g. page_views /
+        # video_views aren't aggregated yet) — skip rather than paint a misleading verdict.
+        if rec is None or pd.isna(rec["value"]) or float(rec["value"]) == 0.0:
+            continue
+        t = targets.get(key, {}) or {}
+        sample = ([r["value"] for r in per.to_dict("records") if r["metric"] == key]
+                  if per is not None else None)
+        g = _rag_gauge(rec["value"], rec["higher_is_better"],
+                       good=t.get("good"), warn=t.get("warn"), sample=sample)
+        if g is None:
+            continue
+        rag.append({"key": key, "label": rec["label"],
+                    "value_str": _fmt(rec["value"], rec["format"]), **g})
+
+    pace, grid = [], []
+    grid.append(("Spend", _money(float(paid["spend"].sum()))))
+    for key in vol_keys:
+        rec = nat.get(key)
+        if rec is None or pd.isna(rec["value"]) or float(rec["value"]) == 0.0:
+            continue                           # unpopulated column → omit, don't show "0"
+        val, vstr = float(rec["value"]), _fmt(rec["value"], rec["format"])
+        goal = (targets.get(key, {}) or {}).get("goal")
+        if goal and goal > 0:
+            scale = max(val, float(goal))
+            pace.append({"key": key, "label": rec["label"], "value_str": vstr,
+                         "fill_frac": val / scale, "goal_frac": float(goal) / scale,
+                         "pct": val / float(goal),
+                         "note": f"{val / float(goal) * 100:.0f}% of "
+                                 f"{_fmt(float(goal), rec['format'])} goal"})
+        else:
+            grid.append((rec["label"], vstr))
+
+    return {"tier": tier, "label": TIER_LABELS.get(tier, tier.title()),
+            "pace": pace, "rag": rag, "grid": grid, "measured": measured,
+            "relative_bands": any(r["mode"] == "relative" for r in rag)}
 
 
 # ---------------------------------------------------------------- block 1: KPI trend

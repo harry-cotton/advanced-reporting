@@ -16,7 +16,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
-from advanced_reporting.dashboard import drilldown, insights, theme  # noqa: E402
+from advanced_reporting.dashboard import drilldown, filters, insights, theme  # noqa: E402
 from advanced_reporting.ingestion.naming_decode import UNPARSED  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Audiences", layout="wide")
@@ -39,10 +39,13 @@ def _load(path: str, mtime: float) -> pd.DataFrame:
 
 
 hist = _load(str(history_f), history_f.stat().st_mtime)
-_ls = st.session_state.get("lens_spec")
-if _ls and _ls.channels:
-    hist = hist[hist["channel"].isin(_ls.channels)]
-    st.caption(f'Filtered from Overview query: "{_ls.source_text}"')
+_dates = pd.to_datetime(hist["date"])
+_dr, _chsel = filters.sidebar_filters(
+    hist["channel"].dropna().unique(), _dates.min().date(), _dates.max().date())
+hist = filters.apply(hist, _dr, _chsel)
+if hist.empty:
+    st.info("No rows for the current filter — widen the date range or channel selection.")
+    st.stop()
 aud = drilldown.audience_summary(hist)
 if aud.empty:
     st.info("No audience-decoded rows in the store yet — drop ad-set/ad-group exports "
@@ -52,15 +55,12 @@ if aud.empty:
 unp = drilldown.unparsed_stats(hist)
 known = aud[aud["audience_type"] != UNPARSED]
 
-# --- metric tile row ----------------------------------------------------------------
-_tcols = st.columns(3)
-with _tcols[0]:
-    theme.metric_card("Ad-level spend", insights._money(float(aud["spend"].sum())))
-with _tcols[1]:
-    theme.metric_card("Audiences decoded", str(len(known)))
-with _tcols[2]:
-    theme.metric_card("Unparsed spend", f"{unp['spend_rate'] * 100:.0f}%",
-                      help="Share of ad-level spend under names the convention can't decode.")
+# --- dense totals card ("Media Totals" flavor) --------------------------------------
+theme.metric_grid("Ad-level totals", [
+    ("Ad-level spend", insights._money(float(aud["spend"].sum()))),
+    ("Audiences decoded", str(len(known))),
+    ("Unparsed spend", f"{unp['spend_rate'] * 100:.0f}%"),
+], cols=3)
 st.divider()
 
 # --- unparsed-rate callout (the adoption pitch) --------------------------------------

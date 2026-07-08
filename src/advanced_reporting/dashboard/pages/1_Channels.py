@@ -14,7 +14,8 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
-from advanced_reporting.dashboard import drilldown, insights, theme  # noqa: E402
+from advanced_reporting.dashboard import drilldown, filters, insights, theme  # noqa: E402
+from advanced_reporting.utils import load_config  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Channels", layout="wide")
 theme.inject_css()
@@ -42,17 +43,13 @@ def _load(path: str, mtime: float) -> pd.DataFrame:
 weekly = _load(str(metrics_f), metrics_f.stat().st_mtime)
 hist = _load(str(history_f), history_f.stat().st_mtime)
 
-paid = insights._paid_channels(weekly)
-_ls = st.session_state.get("lens_spec")
-_default_ch = ([c for c in _ls.channels if c in paid]
-               if _ls and _ls.channels else paid)
-sel = st.sidebar.multiselect("Channels", paid, default=_default_ch)
-if _ls and _ls.channels and _ls.source_text:
-    st.sidebar.caption(f'From Overview query: "{_ls.source_text}"')
-weekly = weekly[weekly["channel"].isin(sel)]
-hist = hist[hist["channel"].isin(sel)]
+_dr, _chsel = filters.sidebar_filters(
+    weekly["channel"].unique(),
+    weekly["date"].min().date(), weekly["date"].max().date())
+weekly = filters.apply(weekly, _dr, _chsel)
+hist = filters.apply(hist, _dr, _chsel)
 if weekly.empty:
-    st.info("No rows for the current filter.")
+    st.info("No rows for the current filter — widen the date range or channel selection.")
     st.stop()
 
 # --- metric tile row ----------------------------------------------------------------
@@ -70,21 +67,38 @@ with _tcols[3]:
     theme.metric_card(_out_label, f"{float(weekly[_out_col].sum()):,.0f}")
 st.divider()
 
-# --- weekly spend trend + mix -------------------------------------------------------
+# --- efficiency at a glance (reach-tier gauges for the current selection) ------------
+_rep = (load_config().get("reporting", {}) or {})
+_sc = insights.tier_scorecard(weekly, "reach", targets=_rep.get("targets") or {})
+if _sc["rag"]:
+    theme.action_title(
+        "Efficiency at a glance",
+        "CPM / CPC / CTR for the selected channels, graded against the channel spread "
+        "(set reporting.targets in config for absolute goals).")
+    for _col, _r in zip(st.columns(len(_sc["rag"])), _sc["rag"]):
+        with _col:
+            theme.render_bullets(rag=[_r])
+    st.divider()
+
+# --- spend & CPM by channel (readable bar+line combo) + mix -------------------------
 per_spend = weekly.groupby("channel")["spend"].sum().sort_values(ascending=False)
-top_ch, top_share = per_spend.index[0], per_spend.iloc[0] / per_spend.sum()
+ch_agg = (weekly.groupby("channel")
+          .agg(spend=("spend", "sum"), impressions=("impressions", "sum"))
+          .reset_index())
+ch_agg = ch_agg[ch_agg["spend"] > 0].sort_values("spend", ascending=False)
+ch_agg["cpm"] = ch_agg["spend"] / ch_agg["impressions"].replace(0, float("nan")) * 1000
+top_ch = ch_agg.iloc[0]["channel"]
+top_share = ch_agg.iloc[0]["spend"] / ch_agg["spend"].sum()
 theme.action_title(
-    f"{theme.channel_label(top_ch)} takes {top_share * 100:.0f}% of paid spend")
+    f"{theme.channel_label(top_ch)} takes {top_share * 100:.0f}% of paid spend",
+    "Bars = spend by channel, line = CPM (cost per 1,000 impressions).")
 _left, _right = st.columns([2, 1])
 with _left:
-    ts = weekly.groupby(["date", "channel"], as_index=False)["spend"].sum().sort_values("date")
-    fig = go.Figure()
-    for i, ch in enumerate(per_spend.index):
-        g = ts[ts["channel"] == ch]
-        fig.add_scatter(x=g["date"], y=g["spend"], name=theme.channel_label(ch),
-                        mode="lines", line=dict(color=theme.channel_color(ch, i), width=2),
-                        stackgroup="spend")
-    theme.plotly_chart(fig, yfmt="currency", height=340)
+    _bc, _lc = theme.COMBO_PAIRS["blue_amber"]
+    theme.combo([theme.channel_label(c) for c in ch_agg["channel"]],
+                ch_agg["spend"], ch_agg["cpm"], bar_name="Spend", line_name="CPM",
+                bar_fmt="currency", line_fmt="currency", y2_title="CPM",
+                bar_color=_bc, line_color=_lc, height=360)
 with _right:
     mix = insights.spend_mix(weekly)
     fig = go.Figure(go.Pie(
@@ -95,7 +109,20 @@ with _right:
         textinfo="percent", textfont=dict(size=12)))
     fig.update_layout(annotations=[dict(text="Spend<br>mix", showarrow=False,
                       font=dict(family=theme.SANS, size=14, color=theme.INK_SOFT))])
-    theme.plotly_chart(fig, height=340, legend=False)
+    theme.plotly_chart(fig, height=360, legend=False)
+
+# --- spend & CPC by month (combo trend, readable in place of the old area) ----------
+_mo = weekly.copy()
+_mo["month"] = _mo["date"].dt.to_period("M").dt.to_timestamp()
+mo = (_mo.groupby("month").agg(spend=("spend", "sum"), clicks=("clicks", "sum"))
+         .reset_index().sort_values("month"))
+mo["cpc"] = mo["spend"] / mo["clicks"].replace(0, float("nan"))
+theme.action_title("Spend and CPC by month",
+                   "Monthly spend (bars) with cost-per-click overlaid (line).")
+_bc, _lc = theme.COMBO_PAIRS["teal_rust"]
+theme.combo(mo["month"], mo["spend"], mo["cpc"], bar_name="Spend", line_name="CPC",
+            bar_fmt="currency", line_fmt="currency", y2_title="CPC",
+            bar_color=_bc, line_color=_lc, height=320)
 
 # --- efficiency view ----------------------------------------------------------------
 eff = insights.cost_per_outcome_insight(weekly)

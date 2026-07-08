@@ -13,7 +13,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
-from advanced_reporting.dashboard import drilldown, theme  # noqa: E402
+from advanced_reporting.dashboard import drilldown, insights, theme  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Data Quality", layout="wide")
 theme.inject_css()
@@ -57,6 +57,24 @@ if manifest_f.exists():
                          use_container_width=True, hide_index=True)
 else:
     st.caption("No store manifest yet — run `python scripts/ingest.py`.")
+
+# --- naming-decode quality at a glance (RAG gauges) ---------------------------------
+if history_f.exists():
+    _unp = drilldown.unparsed_stats(pd.read_parquet(history_f))
+    _rate, _cov = _unp["spend_rate"], 1.0 - _unp["spend_rate"]
+    theme.action_title("Naming decode — quality at a glance",
+                       "How much ad-level spend decodes cleanly to audiences/creatives.")
+    _qL, _qR = st.columns(2)
+    with _qL:
+        theme.pace_bullet("Decode coverage", f"{_cov * 100:.0f}%",
+                          fill_frac=_cov, goal_frac=1.0,
+                          note=f"{_cov * 100:.0f}% of ad-level spend decodes cleanly")
+    with _qR:
+        _g = insights._rag_gauge(_rate, higher_is_better=False, good=0.05, warn=0.15)
+        if _g:
+            theme.rag_bullet("Unparsed-name spend", f"{_rate * 100:.0f}%", _g["pos"],
+                             _g["band_stops"], verdict=_g["verdict"],
+                             note="green ≤5% · amber ≤15% · red >15%")
 
 st.divider()
 

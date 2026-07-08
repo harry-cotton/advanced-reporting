@@ -18,7 +18,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
-from advanced_reporting.dashboard import insights, theme  # noqa: E402
+from advanced_reporting.dashboard import filters, insights, theme  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
 from advanced_reporting.utils import load_config  # noqa: E402
 
@@ -49,12 +49,24 @@ def _parse_lens_cached(text: str) -> L.ReportSpec:
     return L.parse_lens(text, use_llm=False)
 
 
-weekly = _load_weekly(str(metrics_f), metrics_f.stat().st_mtime)
-hist = _load_hist(str(history_f), history_f.stat().st_mtime) if history_f.exists() else None
+weekly_all = _load_weekly(str(metrics_f), metrics_f.stat().st_mtime)
+hist_all = _load_hist(str(history_f), history_f.stat().st_mtime) if history_f.exists() else None
 cfg = load_config()
 rep = cfg.get("reporting", {}) or {}
 kpi_label = rep.get("kpi_label", "key events")
 budget_cfg = rep.get("budget")
+
+# --- global sidebar filters (date + channel, carry across every tab) ---------------
+_dr, _chsel = filters.sidebar_filters(
+    weekly_all["channel"].unique(),
+    weekly_all["date"].min().date(), weekly_all["date"].max().date())
+weekly = filters.apply(weekly_all, _dr, _chsel)
+hist = filters.apply(hist_all, _dr, _chsel) if hist_all is not None else None
+if weekly.empty:
+    st.title("How the campaign is doing")
+    st.info("No rows for the current filter — widen the date range or channel selection "
+            "in the sidebar.")
+    st.stop()
 
 # --- masthead -------------------------------------------------------------------
 st.title("How the campaign is doing")
@@ -63,30 +75,21 @@ n_paid = len(insights._paid_channels(weekly))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
            "below is computed from the weekly tables — no generated commentary.")
 
-# --- sidebar: preset query buttons ------------------------------------------
-_PRESET_QUERIES = [
-    ("Clicks",      "break down click performance"),
-    ("Budget",      "where is my budget going"),
-    ("ROAS",        "what is the ROAS"),
-    ("Impressions", "show impressions by channel"),
-    ("Conversions", "conversion breakdown"),
-    ("Engagement",  "engagement performance"),
-]
-st.sidebar.markdown("**Quick views**")
-for _btn_label, _btn_query in _PRESET_QUERIES:
-    if st.sidebar.button(_btn_label, key=f"_qbtn_{_btn_label}",
-                         use_container_width=True):
-        if st.session_state.get("_active_query") == _btn_query:
-            st.session_state.pop("_active_query", None)   # toggle off
-        else:
-            st.session_state["_active_query"] = _btn_query
-
-_aq = st.session_state.get("_active_query", "")
-if _aq:
-    _lens_spec = _parse_lens_cached(_aq)
+# --- quick-view lenses (compact pills in the main page, single-select + tap-to-clear)
+_PRESET_QUERIES = {
+    "Clicks":      "break down click performance",
+    "Budget":      "where is my budget going",
+    "ROAS":        "what is the ROAS",
+    "Impressions": "show impressions by channel",
+    "Conversions": "conversion breakdown",
+    "Engagement":  "engagement performance",
+}
+_picked = st.pills("Quick views", list(_PRESET_QUERIES),
+                   selection_mode="single", default=None, key="_quick_view",
+                   help="Jump to a focused breakdown; tap the active pill again to clear.")
+if _picked:
+    _lens_spec = _parse_lens_cached(_PRESET_QUERIES[_picked])
     st.session_state["lens_spec"] = _lens_spec
-    _active_label = next((l for l, q in _PRESET_QUERIES if q == _aq), _aq)
-    st.sidebar.caption(f"Focus: **{_active_label}** — click again to clear.")
 else:
     _lens_spec = None
     st.session_state.pop("lens_spec", None)
@@ -100,6 +103,30 @@ for col, t in zip(cols, tiles):
                           delta_color=t["delta_color"], help=t.get("help"))
 st.divider()
 theme.lede(insights.topline_summary(weekly, kpi_label))
+
+# --- tier scorecard: Awareness / Engagement / Action goal gauges -------------------
+_TIER_BY_LABEL = {"Awareness": "reach", "Engagement": "intent", "Action": "outcome"}
+st.markdown("")  # small breath before the segmented control
+_tier_label = st.segmented_control(
+    "View by tier", list(_TIER_BY_LABEL), default="Awareness",
+    key="_tier_lens", label_visibility="collapsed",
+    help="Awareness → reach, Engagement → intent, Action → outcome (the KPI pyramid).")
+_tier = _TIER_BY_LABEL.get(_tier_label or "Awareness", "reach")
+_targets = rep.get("targets") or {}
+_sc = insights.tier_scorecard(weekly, _tier, targets=_targets, kpi_label=kpi_label)
+theme.action_title(f"{_sc['label']} — pacing and efficiency against goal")
+_scL, _scR = st.columns([3, 2])
+with _scL:
+    theme.render_bullets(_sc["pace"], _sc["rag"])
+    if not _sc["pace"] and not _sc["rag"]:
+        st.info(f"The {_sc['label']} tier isn't measured in the current data yet.")
+    if _sc["relative_bands"]:
+        st.caption("Gauge bands = your **channel spread** (green third = best-performing "
+                   "channels); set `reporting.targets` in config for absolute goals.")
+with _scR:
+    if _sc["grid"]:
+        theme.metric_grid(f"{_sc['label']} totals", _sc["grid"], cols=2)
+st.divider()
 
 
 def _narrow():

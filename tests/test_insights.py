@@ -153,6 +153,88 @@ def test_audience_callout_returns_none_without_column():
     assert insights.audience_callout_insight(hist) is None
 
 
+def _weekly_reach() -> pd.DataFrame:
+    """4 weeks, 2 paid channels with a clean CPM/CPC spread + organic (no spend)."""
+    dates = pd.date_range("2026-01-05", periods=4, freq="W-MON")
+    rows = []
+    for d in dates:
+        # meta: cheap CPM ($5), linkedin: dear CPM ($20)
+        rows.append({"date": d, "channel": "meta", "spend": 1000.0,
+                     "impressions": 200_000.0, "clicks": 2_000.0})
+        rows.append({"date": d, "channel": "linkedin", "spend": 1000.0,
+                     "impressions": 50_000.0, "clicks": 500.0})
+        rows.append({"date": d, "channel": "organic_search", "spend": 0.0,
+                     "impressions": 0.0, "clicks": 0.0})
+    return pd.DataFrame(rows)
+
+
+def test_rag_gauge_absolute_cost_verdicts():
+    # cost metric (higher_is_better=False): good <= warn
+    assert insights._rag_gauge(1.5, False, good=2.0, warn=4.0)["verdict"] == "good"
+    assert insights._rag_gauge(3.0, False, good=2.0, warn=4.0)["verdict"] == "warn"
+    assert insights._rag_gauge(5.0, False, good=2.0, warn=4.0)["verdict"] == "bad"
+    g = insights._rag_gauge(1.5, False, good=2.0, warn=4.0)
+    assert g["mode"] == "absolute"
+    # band order left→right is good, warn, bad for a cost metric
+    assert [b[2] for b in g["band_stops"]] == ["good", "warn", "bad"]
+
+
+def test_rag_gauge_absolute_rate_verdicts():
+    # rate metric (higher_is_better=True): good >= warn
+    assert insights._rag_gauge(0.02, True, good=0.012, warn=0.006)["verdict"] == "good"
+    assert insights._rag_gauge(0.008, True, good=0.012, warn=0.006)["verdict"] == "warn"
+    assert insights._rag_gauge(0.003, True, good=0.012, warn=0.006)["verdict"] == "bad"
+
+
+def test_rag_gauge_relative_needs_sample():
+    # NaN value → None; too-few sample points in relative mode → None
+    assert insights._rag_gauge(float("nan"), False) is None
+    assert insights._rag_gauge(3.0, False, sample=[3.0]) is None
+    g = insights._rag_gauge(3.0, False, sample=[1.0, 3.0, 5.0])
+    assert g is not None and g["mode"] == "relative"
+
+
+def test_tier_scorecard_reach_relative_bands():
+    sc = insights.tier_scorecard(_weekly_reach(), "reach")
+    assert sc["label"] == "Awareness"
+    keys = {r["key"] for r in sc["rag"]}
+    assert {"cpm", "cpc"} <= keys                  # efficiency gauges present
+    assert sc["relative_bands"]                    # no targets → channel-spread bands
+    assert not sc["pace"]                          # no goals configured → no pacing bars
+    grid_labels = {lbl for lbl, _ in sc["grid"]}
+    assert "Spend" in grid_labels and "Impressions" in grid_labels
+
+
+def test_tier_scorecard_reach_with_targets_paces_and_grades():
+    targets = {"impressions": {"goal": 2_000_000},
+               "cpm": {"good": 2.0, "warn": 4.0}}
+    sc = insights.tier_scorecard(_weekly_reach(), "reach", targets=targets)
+    pace_keys = {p["key"] for p in sc["pace"]}
+    assert "impressions" in pace_keys              # goal set → pacing bar
+    impr = next(p for p in sc["pace"] if p["key"] == "impressions")
+    # total impressions = (200k+50k)*4 = 1.0M vs 2.0M goal → 50%
+    assert impr["pct"] == pytest.approx(0.5, abs=0.01)
+    cpm = next(r for r in sc["rag"] if r["key"] == "cpm")
+    # blended CPM = 8000 spend / 1.0M impr * 1000 = $8 → above warn(4) → bad
+    assert cpm["verdict"] == "bad" and cpm["mode"] == "absolute"
+
+
+def test_tier_scorecard_skips_unpopulated_zero_metrics():
+    # video_views / pages_per_session are all-zero (present but never aggregated) → omitted
+    wk = _weekly_reach().copy()
+    wk["sessions"] = 1000.0
+    wk["engaged_sessions"] = 500.0
+    wk["page_views"] = 0.0          # unpopulated → pages_per_session must be skipped
+    wk["video_views"] = 0.0         # unpopulated → volume metric must be skipped
+    sc = insights.tier_scorecard(wk, "intent")
+    rag_keys = {r["key"] for r in sc["rag"]}
+    assert "pages_per_session" not in rag_keys      # zero ratio not painted "good"
+    assert "engagement_rate" in rag_keys            # real value still shown
+    grid_labels = {lbl for lbl, _ in sc["grid"]}
+    assert "Video views" not in grid_labels         # zero volume omitted
+    assert "Sessions" in grid_labels
+
+
 def test_macro_context_stays_hidden(tmp_path):
     assert insights.macro_context({}) is None
     assert insights.macro_context(

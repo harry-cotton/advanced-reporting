@@ -42,6 +42,21 @@ def test_claimed_vs_measured_tokens_are_distinct():
     assert theme.CLAIMED not in theme.CHANNEL_COLORS.values()
 
 
+def test_combo_fig_has_secondary_axis_and_house_style():
+    fig = theme.combo_fig([1, 2, 3], [10, 20, 30], [1.0, 2.0, 1.5],
+                          bar_name="Spend", line_name="CPM",
+                          bar_fmt="currency", line_fmt="currency", y2_title="CPM")
+    # bar on primary axis, line on secondary
+    assert fig.data[0].type == "bar"
+    assert fig.data[1].type == "scatter" and fig.data[1].yaxis == "y2"
+    # secondary axis is right-side, gridless, formatted; primary keeps the house grid
+    assert fig.layout.yaxis2.side == "right"
+    assert fig.layout.yaxis2.showgrid is False
+    assert fig.layout.yaxis2.tickformat == "$,.0f"
+    assert fig.layout.yaxis.gridcolor == theme.GRID
+    assert fig.layout.font.family == theme.SANS
+
+
 def test_annotate_uses_quiet_style():
     fig = theme.annotate(_fig(), x=2, y=20.0, text="peak week")
     ann = fig.layout.annotations[0]

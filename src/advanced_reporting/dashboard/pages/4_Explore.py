@@ -13,9 +13,10 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
-from advanced_reporting.dashboard import insights, theme  # noqa: E402
+from advanced_reporting.dashboard import filters, insights, theme  # noqa: E402
 from advanced_reporting.reporting import metrics as M  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
+from advanced_reporting.utils import load_config  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Explore", layout="wide")
 theme.inject_css()
@@ -47,20 +48,22 @@ def _parse_lens_cached(text: str, use_llm: bool):
 
 m = _load_metrics(str(metrics_f), metrics_f.stat().st_mtime)
 has_engagement = "sessions" in m.columns
+_rep = (load_config().get("reporting", {}) or {})
+_targets = _rep.get("targets") or {}
+kpi_label = _rep.get("kpi_label", "key events")
 
-# --- sidebar: filters + goal lens ---
-channels = sorted(m["channel"].unique())
-sel = st.sidebar.multiselect("Channels", channels, default=channels)
-dr = st.sidebar.date_input("Date range", (m["date"].min(), m["date"].max()))
+# --- sidebar: global filters + goal lens ---
+dr, chsel = filters.sidebar_filters(
+    m["channel"].unique(), m["date"].min().date(), m["date"].max().date())
 
 goals_cfg = M.load_campaign_goals()
 goal_tiers = goals_cfg.get("goal_primary_tier") or {
     "awareness": "reach", "consideration": "intent", "conversion": "outcome"}
 goal_list = list(goal_tiers.keys())
 default_goal = goals_cfg.get("default_goal", goal_list[-1] if goal_list else "conversion")
-goal = st.sidebar.selectbox(
-    "Campaign goal (report lens)", goal_list,
-    index=goal_list.index(default_goal) if default_goal in goal_list else 0)
+goal = st.sidebar.pills(
+    "Campaign goal (report lens)", goal_list, selection_mode="single",
+    default=default_goal, key="_explore_goal") or default_goal
 primary = M.primary_tier(goal, goals_cfg)
 
 lens_text = st.sidebar.text_input("Report lens (free text)",
@@ -77,11 +80,9 @@ if lens_text.strip():
                        + (f", channels: {', '.join(lens_spec.channels)}"
                           if lens_spec.channels else ""))
 
-f = m[m["channel"].isin(sel)]
+f = filters.apply(m, dr, chsel)
 if lens_spec is not None and lens_spec.channels:
     f = f[f["channel"].isin(lens_spec.channels)]
-if isinstance(dr, tuple) and len(dr) == 2:
-    f = f[(f["date"] >= pd.Timestamp(dr[0])) & (f["date"] <= pd.Timestamp(dr[1]))]
 if f.empty:
     st.info("No rows for the current filters.")
     st.stop()
@@ -105,24 +106,35 @@ if not has_engagement:
                "`python scripts/run_pipeline.py` after the Phase-2 engagement update to "
                "populate sessions/engagement. Reach + outcome tiers show below.")
 
-# --- KPI pyramid (apex -> base), primary tier highlighted by the goal lens ---
+# --- KPI pyramid (apex -> base) as goal gauges, primary tier flagged by the lens ---
 st.subheader("KPI pyramid")
-st.caption(f"Goal lens: **{goal}** → primary tier: **{primary}**. "
-           "Values are aggregate ratios over the current filter.")
-pyr = M.pyramid(f)
+st.caption(f"Goal lens: **{goal}** → primary tier: **{primary}**. Efficiency and quality "
+           "metrics are graded (green/amber/red) against your channel spread — or "
+           "`reporting.targets` when set; volumes show as totals.")
 TIER_TITLE = {"outcome": "Outcome / action", "intent": "Intent / engagement",
               "reach": "Reach / awareness"}
+_any_relative = False
 for tier in ["outcome", "intent", "reach"]:
-    rows = pyr.get(tier, [])
-    title = TIER_TITLE.get(tier, tier)
-    if tier == primary:
-        st.markdown(f"### {title} ⭐ _primary_")
-    else:
-        st.markdown(f"#### {title}")
-    cols = st.columns(max(len(rows), 1))
-    for col, r in zip(cols, rows):
-        col.metric(r["label"], M.format_value(r["value"], r["format"]))
+    sc = insights.tier_scorecard(f, tier, targets=_targets, kpi_label=kpi_label)
+    star = " ⭐ primary" if tier == primary else ""
+    theme.action_title(f"{TIER_TITLE.get(tier, tier)}{star}")
+    if not sc["pace"] and not sc["rag"] and len(sc["grid"]) <= 1:
+        st.caption("Not measured in the current data yet.")
+        st.divider()
+        continue
+    _l, _r = st.columns([3, 2])
+    with _l:
+        theme.render_bullets(sc["pace"], sc["rag"])
+        if not sc["pace"] and not sc["rag"]:
+            st.caption("No graded metrics for this tier — see totals.")
+    with _r:
+        if sc["grid"]:
+            theme.metric_grid(f"{TIER_TITLE.get(tier, tier)} totals", sc["grid"], cols=2)
+    _any_relative = _any_relative or sc["relative_bands"]
     st.divider()
+if _any_relative:
+    st.caption("Gauge bands = your channel spread (green third = best-performing "
+               "channels); set `reporting.targets` in config for absolute goals.")
 
 if lens_spec is not None:
     st.subheader("Lens report")
@@ -156,17 +168,30 @@ agg["CPA"] = (agg["spend"] / agg["conversions"]).round(0)
 agg["ROAS"] = (agg["platform_revenue"] / agg["spend"]).round(2)
 st.dataframe(agg, use_container_width=True)
 
-# --- spend over time (house-style plotly; per-channel so the mix is visible) ---
-st.subheader("Spend over time")
-ts = (f.groupby(["date", "channel"], as_index=False)["spend"].sum()
-        .sort_values("date"))
-fig = go.Figure()
-for i, ch in enumerate(sorted(ts["channel"].unique())):
-    g = ts[ts["channel"] == ch]
-    fig.add_scatter(x=g["date"], y=g["spend"], name=theme.channel_label(ch),
-                    mode="lines", line=dict(color=theme.channel_color(ch, i), width=2),
-                    stackgroup="spend")
-theme.plotly_chart(fig, yfmt="currency")
+# --- monthly trends as bar+line combos (volume + efficiency) ---
+st.subheader("Trends by month")
+_mo = f.copy()
+_mo["month"] = _mo["date"].dt.to_period("M").dt.to_timestamp()
+mo = (_mo.groupby("month")
+         .agg(spend=("spend", "sum"), impressions=("impressions", "sum"),
+              clicks=("clicks", "sum"), conversions=("conversions", "sum"))
+         .reset_index().sort_values("month"))
+mo["cpm"] = mo["spend"] / mo["impressions"].replace(0, float("nan")) * 1000
+mo["cpa"] = mo["spend"] / mo["conversions"].replace(0, float("nan"))
+_c1, _c2 = st.columns(2)
+with _c1:
+    theme.action_title("Impressions & CPM by month")
+    _bc, _lc = theme.COMBO_PAIRS["violet_gold"]
+    theme.combo(mo["month"], mo["impressions"], mo["cpm"], bar_name="Impressions",
+                line_name="CPM", bar_fmt="count", line_fmt="currency", y2_title="CPM",
+                bar_color=_bc, line_color=_lc, height=320)
+with _c2:
+    theme.action_title("Spend & CPA by month")
+    _bc, _lc = theme.COMBO_PAIRS["green_terra"]
+    theme.combo(mo["month"], mo["spend"], mo["cpa"], bar_name="Spend", line_name="CPA",
+                bar_fmt="currency", line_fmt="currency", y2_title="CPA",
+                bar_color=_bc, line_color=_lc, height=320)
+st.caption("CPA uses platform-claimed conversions.")
 
 # --- MMM summary (if a model run is available) ---
 if summary_f.exists():

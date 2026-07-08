@@ -51,6 +51,24 @@ reporting:
   # budget:
   #   total: 100000            # planned spend for the flight
   #   flight_weeks: 26         # flight length in weeks
+  # Optional goal thresholds for the tier scorecard's bullet gauges (Exec Summary).
+  # Per metric key (see config/metrics.yaml):
+  #   goal        : target value — turns a volume metric into a pacing bar (else totals grid)
+  #   good / warn : RAG thresholds for efficiency/quality metrics. Direction follows the
+  #                 metric's higher_is_better: for costs (lower=better) good <= warn; for
+  #                 rates (higher=better) good >= warn.
+  # Any metric with no entry falls back to bands derived from the channel spread (labeled
+  # as such) — no faked absolute target. Mirrors the Power BI "Goals" table.
+  targets: {}
+  # targets:
+  #   impressions: {goal: 700000000}
+  #   clicks:      {goal: 800000}
+  #   key_events:  {goal: 2000000}
+  #   cpm: {good: 2.0, warn: 4.0}
+  #   cpc: {good: 1.0, warn: 2.0}
+  #   ctr: {good: 0.012, warn: 0.006}
+  #   cost_per_key_event: {good: 0.25, warn: 0.75}
+  #   roas: {good: 3.0, warn: 1.5}
   # DEFERRED "External context" aside on the Overview: curated per-client notes
   # only (one bullet per line), never generated content. Hidden until enabled.
   macro_context:
