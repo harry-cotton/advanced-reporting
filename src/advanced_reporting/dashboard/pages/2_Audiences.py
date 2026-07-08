@@ -19,8 +19,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.dashboard import drilldown, insights, theme  # noqa: E402
 from advanced_reporting.ingestion.naming_decode import UNPARSED  # noqa: E402
 
-st.set_page_config(page_title="Audiences — Advanced Reporting", layout="wide")
+st.set_page_config(page_title="Advanced Reporting — Audiences", layout="wide")
 theme.inject_css()
+theme.nav_bar()
 st.title("Audiences")
 st.caption("Decoded from ad-set/ad names via the naming convention. **All conversion "
            "numbers on this page are platform-claimed** — GA4 measures outcomes at "

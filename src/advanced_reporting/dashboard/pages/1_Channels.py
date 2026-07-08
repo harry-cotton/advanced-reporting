@@ -16,8 +16,9 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.dashboard import drilldown, insights, theme  # noqa: E402
 
-st.set_page_config(page_title="Channels — Advanced Reporting", layout="wide")
+st.set_page_config(page_title="Advanced Reporting — Channels", layout="wide")
 theme.inject_css()
+theme.nav_bar()
 st.title("Channels")
 st.caption("Trends, efficiency and the campaign → audience → creative breakdown. "
            "Key events are GA4-measured at campaign grain; everything below that is "

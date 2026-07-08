@@ -22,8 +22,9 @@ from advanced_reporting.dashboard import insights, theme  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
 from advanced_reporting.utils import load_config  # noqa: E402
 
-st.set_page_config(page_title="Advanced Reporting — Overview", layout="wide")
+st.set_page_config(page_title="Advanced Reporting — Exec Summary", layout="wide")
 theme.inject_css()
+theme.nav_bar()
 
 metrics_f = ROOT / "data" / "processed" / "channel_weekly_metrics.csv"
 history_f = ROOT / "data" / "processed" / "history.parquet"
@@ -62,14 +63,30 @@ n_paid = len(insights._paid_channels(weekly))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
            "below is computed from the weekly tables — no generated commentary.")
 
-# --- query bar ------------------------------------------------------------------
-_query = st.sidebar.text_input(
-    "Ask about this campaign",
-    placeholder="e.g. break down click performance",
-    help="Keyword parser — reshapes this page and filters sub-pages. No API key needed.")
-if _query.strip():
-    _lens_spec = _parse_lens_cached(_query.strip())
+# --- sidebar: preset query buttons ------------------------------------------
+_PRESET_QUERIES = [
+    ("Clicks",      "break down click performance"),
+    ("Budget",      "where is my budget going"),
+    ("ROAS",        "what is the ROAS"),
+    ("Impressions", "show impressions by channel"),
+    ("Conversions", "conversion breakdown"),
+    ("Engagement",  "engagement performance"),
+]
+st.sidebar.markdown("**Quick views**")
+for _btn_label, _btn_query in _PRESET_QUERIES:
+    if st.sidebar.button(_btn_label, key=f"_qbtn_{_btn_label}",
+                         use_container_width=True):
+        if st.session_state.get("_active_query") == _btn_query:
+            st.session_state.pop("_active_query", None)   # toggle off
+        else:
+            st.session_state["_active_query"] = _btn_query
+
+_aq = st.session_state.get("_active_query", "")
+if _aq:
+    _lens_spec = _parse_lens_cached(_aq)
     st.session_state["lens_spec"] = _lens_spec
+    _active_label = next((l for l, q in _PRESET_QUERIES if q == _aq), _aq)
+    st.sidebar.caption(f"Focus: **{_active_label}** — click again to clear.")
 else:
     _lens_spec = None
     st.session_state.pop("lens_spec", None)

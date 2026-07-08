@@ -55,6 +55,16 @@ def channel_color(channel: str, i: int = 0) -> str:
 
 
 # ---------------------------------------------------------------- page chrome
+# Pages in display order: (label, path-relative-to-app.py)
+_NAV_PAGES = [
+    ("Exec Summary", "app.py"),
+    ("Channels",     "pages/1_Channels.py"),
+    ("Audiences",    "pages/2_Audiences.py"),
+    ("Data Quality", "pages/3_Data_Quality.py"),
+    ("Explore",      "pages/4_Explore.py"),
+]
+
+
 def inject_css() -> None:
     """Editorial typography: serif headlines, calmer captions. Call once per page."""
     st.markdown(
@@ -70,7 +80,40 @@ def inject_css() -> None:
         }}
         [data-testid="stCaptionContainer"] {{ color: {INK_SOFT}; }}
         [data-testid="stMetricLabel"] {{ color: {INK_SOFT}; }}
+
+        /* Hide Streamlit's auto-generated sidebar page list — nav_bar() replaces it */
+        [data-testid="stSidebarNavItems"],
+        [data-testid="stSidebarNavSeparator"] {{ display: none !important; }}
+
+        /* Style page_link nav items to look like tab buttons */
+        [data-testid="stPageLink"] a {{
+            display: block; text-align: center;
+            padding: 0.35rem 0.5rem;
+            border-bottom: 2px solid transparent;
+            color: {INK_SOFT}; text-decoration: none;
+            font-family: {SANS}; font-size: 0.88rem; font-weight: 500;
+            transition: color 0.15s, border-color 0.15s;
+        }}
+        [data-testid="stPageLink"] a:hover {{
+            color: {ACCENT}; border-bottom-color: {ACCENT};
+        }}
         </style>""",
+        unsafe_allow_html=True,
+    )
+
+
+def nav_bar() -> None:
+    """Horizontal top navigation — row of page links + a separator line.
+
+    Call immediately after inject_css() on every page. Paths are relative to
+    the dashboard app.py entrypoint (src/advanced_reporting/dashboard/).
+    """
+    cols = st.columns(len(_NAV_PAGES))
+    for col, (label, path) in zip(cols, _NAV_PAGES):
+        with col:
+            st.page_link(path, label=label, use_container_width=True)
+    st.markdown(
+        f'<div style="border-bottom:1px solid {GRID};margin:-0.5rem 0 1rem 0"></div>',
         unsafe_allow_html=True,
     )
 

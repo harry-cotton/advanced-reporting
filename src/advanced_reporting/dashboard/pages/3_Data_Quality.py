@@ -15,8 +15,9 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.dashboard import drilldown, theme  # noqa: E402
 
-st.set_page_config(page_title="Data quality — Advanced Reporting", layout="wide")
+st.set_page_config(page_title="Advanced Reporting — Data Quality", layout="wide")
 theme.inject_css()
+theme.nav_bar()
 st.title("Data quality")
 
 history_f = ROOT / "data" / "processed" / "history.parquet"

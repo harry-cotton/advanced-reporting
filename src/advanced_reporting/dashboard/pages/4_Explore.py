@@ -17,8 +17,9 @@ from advanced_reporting.dashboard import insights, theme  # noqa: E402
 from advanced_reporting.reporting import metrics as M  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
 
-st.set_page_config(page_title="Explore — Advanced Reporting", layout="wide")
+st.set_page_config(page_title="Advanced Reporting — Explore", layout="wide")
 theme.inject_css()
+theme.nav_bar()
 st.title("Explore")
 st.caption("KPI pyramid, funnel and free-text lens over the weekly metrics — "
            "filter in the sidebar.")
