@@ -16,7 +16,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
-from advanced_reporting.dashboard import drilldown, theme  # noqa: E402
+from advanced_reporting.dashboard import drilldown, insights, theme  # noqa: E402
 from advanced_reporting.ingestion.naming_decode import UNPARSED  # noqa: E402
 
 st.set_page_config(page_title="Audiences — Advanced Reporting", layout="wide")
@@ -44,8 +44,21 @@ if aud.empty:
             "in `data/inbox/` and re-ingest.")
     st.stop()
 
-# --- unparsed-rate callout (the adoption pitch) --------------------------------------
 unp = drilldown.unparsed_stats(hist)
+known = aud[aud["audience_type"] != UNPARSED]
+
+# --- metric tile row ----------------------------------------------------------------
+_tcols = st.columns(3)
+with _tcols[0]:
+    theme.metric_card("Ad-level spend", insights._money(float(aud["spend"].sum())))
+with _tcols[1]:
+    theme.metric_card("Audiences decoded", str(len(known)))
+with _tcols[2]:
+    theme.metric_card("Unparsed spend", f"{unp['spend_rate'] * 100:.0f}%",
+                      help="Share of ad-level spend under names the convention can't decode.")
+st.divider()
+
+# --- unparsed-rate callout (the adoption pitch) --------------------------------------
 if unp["names"]:
     st.info(f"**{unp['spend_rate'] * 100:.0f}% of ad-level spend "
             f"(\\${unp['spend']:,.0f}) runs under names the convention can't "
@@ -55,58 +68,59 @@ if unp["names"]:
 else:
     st.caption("Every ad-level name decoded cleanly — 0% unparsed.")
 
-known = aud[aud["audience_type"] != UNPARSED]
+# --- cost ranking + spend share side by side ----------------------------------------
+_left, _right = st.columns([1, 1])
+with _left:
+    if len(known) >= 2:
+        best, worst = known.iloc[0], known.iloc[-1]
+        mult = worst["cost_per_claimed"] / best["cost_per_claimed"]
+        theme.action_title(
+            f"{best['audience_type']} · {best['audience_detail']} converts at "
+            f"{mult:.1f}x less cost than {worst['audience_type']} · "
+            f"{worst['audience_detail']}",
+            "Cost per platform-claimed conversion, cheapest first.")
+    else:
+        theme.action_title("Cost per platform-claimed conversion by audience")
+    labels = [f"{t} · {d}" if t != UNPARSED else UNPARSED
+              for t, d in zip(aud["audience_type"], aud["audience_detail"])]
+    colors = [theme.INK_SOFT if t == UNPARSED
+              else theme.ACCENT if t == "PROSPECT" else theme.CLAIMED
+              for t in aud["audience_type"]]
+    fig = go.Figure(go.Bar(
+        y=labels[::-1], x=aud["cost_per_claimed"][::-1], orientation="h",
+        marker_color=colors[::-1],
+        text=[f"${v:,.0f}" for v in aud["cost_per_claimed"]][::-1],
+        textposition="outside"))
+    theme.plotly_chart(fig, xfmt="currency",
+                       height=max(400, 60 + 44 * len(aud)), legend=False)
+    st.caption("Blue = prospecting, amber = retargeting (warm audiences convert cheaper "
+               "by construction — compare within a type, not across), gray = unparsed.")
 
-# --- cost ranking ---------------------------------------------------------------------
-if len(known) >= 2:
-    best, worst = known.iloc[0], known.iloc[-1]
-    mult = worst["cost_per_claimed"] / best["cost_per_claimed"]
-    theme.action_title(
-        f"{best['audience_type']} · {best['audience_detail']} converts at "
-        f"{mult:.1f}x less cost than {worst['audience_type']} · "
-        f"{worst['audience_detail']}",
-        "Cost per platform-claimed conversion, cheapest first.")
-else:
-    theme.action_title("Cost per platform-claimed conversion by audience")
-labels = [f"{t} · {d}" if t != UNPARSED else UNPARSED
-          for t, d in zip(aud["audience_type"], aud["audience_detail"])]
-colors = [theme.INK_SOFT if t == UNPARSED
-          else theme.ACCENT if t == "PROSPECT" else theme.CLAIMED
-          for t in aud["audience_type"]]
-fig = go.Figure(go.Bar(
-    y=labels[::-1], x=aud["cost_per_claimed"][::-1], orientation="h",
-    marker_color=colors[::-1],
-    text=[f"${v:,.0f}" for v in aud["cost_per_claimed"]][::-1],
-    textposition="outside"))
-theme.plotly_chart(fig, xfmt="currency", height=80 + 40 * len(aud), legend=False)
-st.caption("Blue = prospecting, amber = retargeting (warm audiences convert cheaper "
-           "by construction — compare within a type, not across), gray = unparsed.")
-
-# --- spend share vs claimed share ------------------------------------------------------
-gap = (known["claimed_share"] - known["spend_share"])
-if len(known) >= 2:
-    star = known.loc[gap.idxmax()]
-    theme.action_title(
-        f"{star['audience_type']} · {star['audience_detail']} wins "
-        f"{star['claimed_share'] * 100:.0f}% of claimed conversions on "
-        f"{star['spend_share'] * 100:.0f}% of spend",
-        "Above the line = earning more than its share of budget.")
-    fig = go.Figure()
-    lim = max(known["spend_share"].max(), known["claimed_share"].max()) * 1.2
-    fig.add_scatter(x=[0, lim], y=[0, lim], mode="lines", showlegend=False,
-                    line=dict(color=theme.GRID, width=1, dash="dot"))
-    for i, r in known.iterrows():
-        fig.add_scatter(
-            x=[r["spend_share"]], y=[r["claimed_share"]], mode="markers+text",
-            text=[f"{r['audience_type']} · {r['audience_detail']}"],
-            textposition="top center", textfont=dict(size=11, color=theme.INK_SOFT),
-            marker=dict(size=12, color=theme.ACCENT if r["audience_type"] == "PROSPECT"
-                        else theme.CLAIMED),
-            showlegend=False)
-    fig.update_xaxes(title_text="Share of spend", title_font=dict(size=12))
-    fig.update_yaxes(title_text="Share of claimed conversions",
-                     title_font=dict(size=12))
-    theme.plotly_chart(fig, xfmt="pct", yfmt="pct", height=400, legend=False)
+with _right:
+    gap = (known["claimed_share"] - known["spend_share"])
+    if len(known) >= 2:
+        star = known.loc[gap.idxmax()]
+        theme.action_title(
+            f"{star['audience_type']} · {star['audience_detail']} wins "
+            f"{star['claimed_share'] * 100:.0f}% of claimed conversions on "
+            f"{star['spend_share'] * 100:.0f}% of spend",
+            "Above the line = earning more than its share of budget.")
+        fig = go.Figure()
+        lim = max(known["spend_share"].max(), known["claimed_share"].max()) * 1.2
+        fig.add_scatter(x=[0, lim], y=[0, lim], mode="lines", showlegend=False,
+                        line=dict(color=theme.GRID, width=1, dash="dot"))
+        for i, r in known.iterrows():
+            fig.add_scatter(
+                x=[r["spend_share"]], y=[r["claimed_share"]], mode="markers+text",
+                text=[f"{r['audience_type']} · {r['audience_detail']}"],
+                textposition="top center", textfont=dict(size=11, color=theme.INK_SOFT),
+                marker=dict(size=12, color=theme.ACCENT if r["audience_type"] == "PROSPECT"
+                            else theme.CLAIMED),
+                showlegend=False)
+        fig.update_xaxes(title_text="Share of spend", title_font=dict(size=12))
+        fig.update_yaxes(title_text="Share of claimed conversions",
+                         title_font=dict(size=12))
+        theme.plotly_chart(fig, xfmt="pct", yfmt="pct", height=400, legend=False)
 
 # --- creative formats ------------------------------------------------------------------
 cre = drilldown.creative_summary(hist)

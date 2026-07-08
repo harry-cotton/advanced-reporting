@@ -29,15 +29,20 @@ if manifest_f.exists():
     unp = (drilldown.unparsed_stats(pd.read_parquet(history_f))
            if history_f.exists() else {"spend_rate": 0.0, "names": []})
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Pulls in store", f"{len(man.get('pulls', []))}",
-              help="Immutable raw pulls consolidated into history.parquet.")
-    c2.metric("History rows", f"{man.get('history_rows', 0):,}")
-    c3.metric("Superseded rows", f"{man.get('superseded_campaign_rows', 0):,}",
-              help="Campaign-level rows dropped because ad-level rows cover the same "
-                   "key — prevents double-counting when both grains are ingested.")
-    c4.metric("Unparsed-name spend", f"{unp['spend_rate'] * 100:.0f}%",
-              help="Share of ad-level spend under names the naming convention can't "
-                   "decode (reported, never guessed).")
+    with c1:
+        theme.metric_card("Pulls in store", f"{len(man.get('pulls', []))}",
+                          help="Immutable raw pulls consolidated into history.parquet.")
+    with c2:
+        theme.metric_card("History rows", f"{man.get('history_rows', 0):,}")
+    with c3:
+        theme.metric_card("Superseded rows", f"{man.get('superseded_campaign_rows', 0):,}",
+                          help="Campaign-level rows dropped because ad-level rows cover "
+                               "the same key — prevents double-counting when both grains "
+                               "are ingested.")
+    with c4:
+        theme.metric_card("Unparsed-name spend", f"{unp['spend_rate'] * 100:.0f}%",
+                          help="Share of ad-level spend under names the naming convention "
+                               "can't decode (reported, never guessed).")
     if man.get("skipped_pulls"):
         st.warning(f"{len(man['skipped_pulls'])} pull(s) skipped at consolidation "
                    "(schema mismatch or unreadable) — see the manifest below.")

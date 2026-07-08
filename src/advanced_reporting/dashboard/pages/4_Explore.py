@@ -13,7 +13,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
-from advanced_reporting.dashboard import theme  # noqa: E402
+from advanced_reporting.dashboard import insights, theme  # noqa: E402
 from advanced_reporting.reporting import metrics as M  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
 
@@ -89,10 +89,15 @@ if f.empty:
 spend, rev, conv = f["spend"].sum(), f["platform_revenue"].sum(), f["conversions"].sum()
 roas_blended = rev / spend if spend else 0.0
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Spend", M.format_value(spend, "currency"))
-c2.metric("Attributed revenue", M.format_value(rev, "currency"))
-c3.metric("Blended ROAS", f"{roas_blended:.2f}x")
-c4.metric("Avg CPA", M.format_value(spend / conv, "currency") if conv else "—")
+with c1:
+    theme.metric_card("Spend", insights._money(float(spend)))
+with c2:
+    theme.metric_card("Attributed revenue", insights._money(float(rev)))
+with c3:
+    theme.metric_card("Blended ROAS", f"{roas_blended:.2f}x")
+with c4:
+    theme.metric_card("Avg CPA", M.format_value(spend / conv, "currency") if conv else "—")
+st.divider()
 
 if not has_engagement:
     st.caption("Intent (engagement) tier isn't in the data yet — re-run "
@@ -130,8 +135,9 @@ if recs:
     for col, r in zip(fcols, recs):
         sr = r["step_rate"]
         delta = None if pd.isna(sr) else f"{sr*100:.1f}% pass-through"
-        col.metric(r["label"], M.format_value(r["value"], "count"),
-                   delta=delta, delta_color="off")
+        with col:
+            theme.metric_card(r["label"], M.format_value(r["value"], "count"),
+                               delta=delta, delta_color="off")
     st.caption("Volume at each stage with pass-through from the prior stage "
                "(impressions → clicks → sessions → engaged → conversions).")
 else:

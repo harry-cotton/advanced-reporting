@@ -49,19 +49,47 @@ if weekly.empty:
     st.info("No rows for the current filter.")
     st.stop()
 
-# --- weekly spend mix ---------------------------------------------------------------
+# --- metric tile row ----------------------------------------------------------------
+_measured = "key_events" in weekly.columns and weekly["key_events"].notna().any()
+_out_col = "key_events" if _measured else "conversions"
+_out_label = "Key events" if _measured else "Claimed conv."
+_tcols = st.columns(4)
+with _tcols[0]:
+    theme.metric_card("Spend", insights._money(float(weekly["spend"].sum())))
+with _tcols[1]:
+    theme.metric_card("Impressions", f"{weekly['impressions'].sum():,.0f}")
+with _tcols[2]:
+    theme.metric_card("Clicks", f"{weekly['clicks'].sum():,.0f}")
+with _tcols[3]:
+    theme.metric_card(_out_label, f"{float(weekly[_out_col].sum()):,.0f}")
+st.divider()
+
+# --- weekly spend trend + mix -------------------------------------------------------
 per_spend = weekly.groupby("channel")["spend"].sum().sort_values(ascending=False)
 top_ch, top_share = per_spend.index[0], per_spend.iloc[0] / per_spend.sum()
 theme.action_title(
     f"{theme.channel_label(top_ch)} takes {top_share * 100:.0f}% of paid spend")
-ts = weekly.groupby(["date", "channel"], as_index=False)["spend"].sum().sort_values("date")
-fig = go.Figure()
-for i, ch in enumerate(per_spend.index):
-    g = ts[ts["channel"] == ch]
-    fig.add_scatter(x=g["date"], y=g["spend"], name=theme.channel_label(ch),
-                    mode="lines", line=dict(color=theme.channel_color(ch, i), width=2),
-                    stackgroup="spend")
-theme.plotly_chart(fig, yfmt="currency", height=340)
+_left, _right = st.columns([2, 1])
+with _left:
+    ts = weekly.groupby(["date", "channel"], as_index=False)["spend"].sum().sort_values("date")
+    fig = go.Figure()
+    for i, ch in enumerate(per_spend.index):
+        g = ts[ts["channel"] == ch]
+        fig.add_scatter(x=g["date"], y=g["spend"], name=theme.channel_label(ch),
+                        mode="lines", line=dict(color=theme.channel_color(ch, i), width=2),
+                        stackgroup="spend")
+    theme.plotly_chart(fig, yfmt="currency", height=340)
+with _right:
+    mix = insights.spend_mix(weekly)
+    fig = go.Figure(go.Pie(
+        labels=[theme.channel_label(c) for c in mix["channel"]],
+        values=mix["spend"], hole=0.62, sort=False,
+        marker=dict(colors=[theme.channel_color(c, i)
+                            for i, c in enumerate(mix["channel"])]),
+        textinfo="percent", textfont=dict(size=12)))
+    fig.update_layout(annotations=[dict(text="Spend<br>mix", showarrow=False,
+                      font=dict(family=theme.SANS, size=14, color=theme.INK_SOFT))])
+    theme.plotly_chart(fig, height=340, legend=False)
 
 # --- efficiency view ----------------------------------------------------------------
 eff = insights.cost_per_outcome_insight(weekly)
