@@ -85,3 +85,20 @@ def test_decode_series_and_unparsed_rate():
     # denominator = the 4 ad-level rows (blank excluded); 1 unparsed among them
     assert nd.unparsed_rate(df) == pytest.approx(0.25)
     assert nd.unparsed_rate(pd.DataFrame({"ad_group": [""], "audience_type": [""]})) == 0.0
+
+
+def test_crosswalk_overrides_take_precedence():
+    """A curated crosswalk maps a non-conforming name to real fields, before the grammar."""
+    ov = {nd.norm_key("Veterans - Feed"): {"audience_type": "PROSPECT",
+                                            "audience_detail": "VETERANS"},
+          nd.norm_key("MissionHero video 1x1"): {"creative": "MISSIONHERO",
+                                                  "creative_format": "VID"}}
+    # matches ignore case/whitespace
+    f = nd.decode_fields("veterans   -   feed", overrides=ov)
+    assert f["audience_type"] == "PROSPECT" and f["audience_detail"] == "VETERANS"
+    f2 = nd.decode_fields("MissionHero video 1x1", overrides=ov)
+    assert f2["creative"] == "MISSIONHERO" and f2["creative_format"] == "VID"
+    # a name not in the crosswalk still falls to the grammar / unparsed
+    assert nd.decode_fields("Advantage+ broad TEST", overrides=ov)["audience_type"] == nd.UNPARSED
+    # grammar still wins for conforming names when no override matches
+    assert nd.decode_fields("PROSPECT_LAL-1PCT_FEED", overrides=ov)["audience_type"] == "PROSPECT"

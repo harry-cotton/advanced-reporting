@@ -68,20 +68,36 @@ def decode_name(name) -> DecodedName:
     return DecodedName("unparsed", audience_type=UNPARSED)
 
 
-def decode_fields(name) -> dict:
-    """The four canonical-schema columns decoded from one name (see FIELD_COLUMNS)."""
+def norm_key(name) -> str:
+    """Normalize a name for crosswalk matching: lowercase, collapse whitespace."""
+    return re.sub(r"\s+", " ", str(name).strip().lower())
+
+
+def decode_fields(name, overrides: dict | None = None) -> dict:
+    """The four canonical-schema columns decoded from one name (see FIELD_COLUMNS).
+
+    A curated ``overrides`` crosswalk (raw name -> fields, keyed by ``norm_key``) is
+    consulted FIRST — the analyst's explicit remediation for names that don't follow the
+    convention. Only then the grammar, then ``(unparsed)``. This is human-decided
+    mapping, never a guess.
+    """
+    if overrides:
+        ov = overrides.get(norm_key(name))
+        if ov:
+            return {c: str(ov.get(c, "") or "") for c in FIELD_COLUMNS}
     d = decode_name(name)
     return {"audience_type": d.audience_type, "audience_detail": d.audience_detail,
             "creative": d.creative, "creative_format": d.creative_format}
 
 
-def decode_series(names: pd.Series) -> pd.DataFrame:
+def decode_series(names: pd.Series, overrides: dict | None = None) -> pd.DataFrame:
     """Decode a series of ad_group names -> DataFrame of FIELD_COLUMNS (index-aligned).
 
-    Names repeat daily in exports, so decoding is memoized over uniques.
+    Names repeat daily in exports, so decoding is memoized over uniques. ``overrides`` is
+    the curated crosswalk (see ``decode_fields``).
     """
     names = pd.Series(names)
-    memo = {n: decode_fields(n) for n in pd.unique(names.dropna())}
+    memo = {n: decode_fields(n, overrides) for n in pd.unique(names.dropna())}
     return pd.DataFrame([memo.get(n, dict(_EMPTY)) for n in names], index=names.index)
 
 

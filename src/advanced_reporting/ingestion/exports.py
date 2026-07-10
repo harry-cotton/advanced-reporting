@@ -33,7 +33,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import naming_decode, schema
-from ..utils import load_mappings
+from ..utils import load_mappings, load_naming_overrides
 
 # source names the store will file pulls under
 GOOGLE, META, LINKEDIN, GA4 = "google_ads", "meta_ads", "linkedin_ads", "ga4"
@@ -47,7 +47,7 @@ def _with_decoded(out: pd.DataFrame, names: pd.Series) -> pd.DataFrame:
     """Attach ad_group + the decoded naming-convention fields to a canonical frame."""
     out = out.copy()
     out["ad_group"] = names.astype(str).str.strip().to_numpy()
-    decoded = naming_decode.decode_series(out["ad_group"])
+    decoded = naming_decode.decode_series(out["ad_group"], overrides=load_naming_overrides())
     for col in naming_decode.FIELD_COLUMNS:
         out[col] = decoded[col].to_numpy()
     return out
@@ -107,6 +107,8 @@ def _google_frame(path: Path) -> pd.DataFrame:
         "platform_revenue": _num(df["Conv. value"]),
         "currency": df["Currency code"].astype(str).str.strip(),
     })
+    if "Video views" in df.columns:                      # Demand Gen / video (mid-funnel)
+        out["video_views"] = _num(df["Video views"])
     if "Ad group" in df.columns:
         out = _with_decoded(out, df["Ad group"])
     return out
@@ -145,6 +147,8 @@ def read_meta_export(path, mappings=None) -> pd.DataFrame:
         "conversions": _num(df["Results"]),
         "platform_revenue": float("nan"),                        # not in this export
     })
+    if "Video plays" in df.columns:                              # mid-funnel engagement
+        out["video_views"] = _num(df["Video plays"])
     if "Ad set name" in df.columns:                              # ad-set-level export
         out = _with_decoded(out, df["Ad set name"])
     return schema.to_canonical(out, META, mappings, currency=currency)
@@ -175,6 +179,8 @@ def _linkedin_frame(path: Path) -> tuple[pd.DataFrame, str | None]:
         "conversions": _num(df["Conversions"]),
         "platform_revenue": float("nan"),
     })
+    if "Video Views" in df.columns:                              # mid-funnel engagement
+        out["video_views"] = _num(df["Video Views"])
     # LinkedIn's hierarchy is Campaign -> Creative (no ad-set tier); a creative report's
     # Creative Name is the sub-campaign entity, so it lands in ad_group like the others.
     if "Creative Name" in df.columns:
@@ -233,6 +239,8 @@ def read_ga4_export(path, mappings=None) -> pd.DataFrame:
         "engaged_sessions": _num(df["Engaged sessions"]),
         "key_events": _num(df["Key events"]),
     })
+    if "Views" in df.columns:                                    # GA4 page/screen views
+        out["page_views"] = _num(df["Views"])
     return schema.to_canonical(out, GA4, mappings)
 
 

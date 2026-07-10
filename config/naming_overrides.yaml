@@ -1,0 +1,38 @@
+# Naming crosswalk — the analyst's curated fix for ad-set / creative names that don't
+# follow the naming convention. Applied by ingestion/naming_decode BEFORE the grammar,
+# so these names decode to real audience/creative fields instead of "(unparsed)".
+#
+# This is human-decided remediation, NOT a guess: each entry is an explicit mapping the
+# analyst reviewed. Names not listed here still fall to the grammar, then "(unparsed)".
+# Keys match case-insensitively and ignore extra whitespace. Edit + re-ingest to apply.
+#
+# Scaffold suggestions with:  python scripts/naming_report.py
+#
+# This file is curated for the federal-recruitment test data. 18 of 19 non-conforming
+# names are mapped; "Advantage+ broad TEST" is intentionally left unmapped (a genuine
+# throwaway test ad set) so the honest residual unparsed rate stays non-zero.
+
+ad_group_overrides:
+  # --- Google Ads ad groups (audience grain) ---
+  "Brand - Exact":                     {audience_type: PROSPECT, audience_detail: KW-BRAND}
+  "Cyber Jobs - Broad":                {audience_type: PROSPECT, audience_detail: KW-CYBER}
+  "Data Analyst Jobs_Phrase":          {audience_type: PROSPECT, audience_detail: KW-DATA}
+  "federal careers nonbrand (legacy)": {audience_type: PROSPECT, audience_detail: KW-NONBRAND}
+  "InMarket Gov Jobs":                 {audience_type: PROSPECT, audience_detail: INMARKET-GOVJOBS}
+  "Lookalike - Applicants":            {audience_type: PROSPECT, audience_detail: LAL-APPLICANTS}
+  "Explore Roles - Cyber":             {audience_type: PROSPECT, audience_detail: ROLE-CYBER}
+  "Explore Roles - Data":              {audience_type: PROSPECT, audience_detail: ROLE-DATA}
+
+  # --- Meta ad sets (audience grain) ---
+  "Veterans - Feed":                   {audience_type: PROSPECT, audience_detail: VETERANS}
+  "LAL 1% Applicants":                 {audience_type: PROSPECT, audience_detail: LAL-1PCT}
+  "Life at the Agency // Reels":       {audience_type: PROSPECT, audience_detail: LIFEATAGENCY}
+  "Role Explainer - Feed":             {audience_type: PROSPECT, audience_detail: ROLE-EXPLAINER}
+  "RT SiteVisitors 30d":               {audience_type: RETARGET, audience_detail: SITE-30D}
+  "RT_Careers_Viewers_Reels":          {audience_type: RETARGET, audience_detail: CAREERS-VIEWERS}
+
+  # --- LinkedIn creatives (creative grain) ---
+  "MissionHero video 1x1":             {creative: MISSIONHERO, creative_format: VID}
+  "Role Spotlight - Carousel":         {creative: ROLESPOTLIGHT, creative_format: CAROUSEL}
+  "benefits one-pager (old)":          {creative: BENEFITS, creative_format: STATIC}
+  "Deadline push STATIC v3":           {creative: DEADLINE, creative_format: STATIC}

@@ -31,9 +31,11 @@ def main(argv=None) -> None:
                     help="data source name (synthetic, csv, google_ads, meta, tiktok, linkedin, ...)")
     ap.add_argument("--start", default=None, help="ISO start date (overrides config data.start)")
     ap.add_argument("--end", default=None, help="ISO end date (overrides config data.end)")
-    ap.add_argument("--inbox", action="store_true",
-                    help="ingest manually-downloaded export files from data/inbox/ "
-                         "(Google Ads / Meta / LinkedIn / GA4; format auto-detected)")
+    ap.add_argument("--inbox", nargs="?", const="__default__", default=None,
+                    help="ingest manually-downloaded export files from a folder "
+                         "(Google Ads / Meta / LinkedIn / GA4; format auto-detected). "
+                         "Bare --inbox uses data/inbox/; pass a subfolder to ingest one "
+                         "test at a time, e.g. --inbox \"data/inbox/Recruitment Marketing Test\"")
     ap.add_argument("--consolidate-only", action="store_true",
                     help="rebuild history.parquet from existing pulls without fetching")
     ap.add_argument("--reset", "--fresh", action="store_true", dest="reset",
@@ -49,15 +51,25 @@ def main(argv=None) -> None:
         else:
             print(f"Reset: nothing to archive for '{args.source}'.")
 
-    if args.inbox:
+    if args.inbox is not None:
         from advanced_reporting.ingestion import naming_decode
         from advanced_reporting.ingestion.exports import read_export
-        inbox = ROOT / "data" / "inbox"
+        if args.inbox == "__default__":
+            inbox = ROOT / "data" / "inbox"
+        else:                                   # a specific folder (absolute, ROOT-relative,
+            p = Path(args.inbox)                # or a bare subfolder name under data/inbox)
+            inbox = p if p.is_absolute() else ROOT / p
+            if not inbox.exists() and (ROOT / "data" / "inbox" / args.inbox).exists():
+                inbox = ROOT / "data" / "inbox" / args.inbox
+        if not inbox.is_dir():
+            print(f"Inbox folder not found: {inbox}")
+            return
         files = sorted(f for f in inbox.glob("*.csv") if not f.name.startswith("_"))
         if not files:
-            print(f"Inbox {inbox.relative_to(ROOT)} has no .csv files — drop platform "
-                  "exports there (see data/inbox/README.md).")
+            print(f"Inbox {inbox} has no .csv files — drop platform exports there "
+                  "(see data/inbox/README.md).")
             return
+        print(f"Ingesting from {inbox}")
         ok = 0
         for f in files:
             try:

@@ -36,3 +36,6 @@ build/
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json
 data/inbox/*
+
+# generated draft from scripts/naming_report.py (not a committed artifact)
+config/naming_overrides.suggested.yaml

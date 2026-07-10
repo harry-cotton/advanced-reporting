@@ -106,3 +106,21 @@ def load_mappings(path: str | Path | None = None) -> dict:
     out.setdefault("channel_aliases", _DEFAULT_MAPPINGS["channel_aliases"])
     out.setdefault("sources", _DEFAULT_MAPPINGS["sources"])
     return out
+
+
+def load_naming_overrides(path: str | Path | None = None) -> dict:
+    """Load the naming crosswalk (``config/naming_overrides.yaml``): raw ad-set/creative
+    name -> decoded fields, the analyst's curated fix for names that don't follow the
+    convention.
+
+    Returns ``{norm_key(raw_name): {audience_type/audience_detail/creative/creative_format}}``
+    with keys normalized (lowercased, whitespace-collapsed) for separator-agnostic
+    matching. Absent file -> ``{}`` (grammar-only decode; nothing overridden).
+    """
+    root = project_root()
+    p = Path(path) if path is not None else root / "config" / "naming_overrides.yaml"
+    if not p.exists():
+        return {}
+    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    raw = data.get("ad_group_overrides") or {}
+    return {re.sub(r"\s+", " ", str(k).strip().lower()): (v or {}) for k, v in raw.items()}

@@ -74,10 +74,28 @@ metrics:
     formula: video_views
     format: count
     higher_is_better: true
+  - key: vtr
+    label: Video view rate
+    tier: intent
+    formula: video_views / impressions
+    format: pct
+    higher_is_better: true
+  - key: engaged_sessions
+    label: Engaged sessions
+    tier: intent
+    formula: engaged_sessions
+    format: count
+    higher_is_better: true
   - key: cost_per_session
     label: Cost / session
     tier: intent
     formula: spend / sessions
+    format: currency
+    higher_is_better: false
+  - key: cost_per_engaged_session
+    label: Cost / engaged session
+    tier: intent
+    formula: spend / engaged_sessions
     format: currency
     higher_is_better: false
 
