@@ -75,25 +75,6 @@ n_paid = len(insights._paid_channels(weekly))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
            "below is computed from the weekly tables — no generated commentary.")
 
-# --- quick-view lenses (compact pills in the main page, single-select + tap-to-clear)
-_PRESET_QUERIES = {
-    "Clicks":      "break down click performance",
-    "Budget":      "where is my budget going",
-    "ROAS":        "what is the ROAS",
-    "Impressions": "show impressions by channel",
-    "Conversions": "conversion breakdown",
-    "Engagement":  "engagement performance",
-}
-_picked = st.pills("Quick views", list(_PRESET_QUERIES),
-                   selection_mode="single", default=None, key="_quick_view",
-                   help="Jump to a focused breakdown; tap the active pill again to clear.")
-if _picked:
-    _lens_spec = _parse_lens_cached(_PRESET_QUERIES[_picked])
-    st.session_state["lens_spec"] = _lens_spec
-else:
-    _lens_spec = None
-    st.session_state.pop("lens_spec", None)
-
 # --- executive tile row ------------------------------------------------------------
 tiles = insights.headline_tiles(weekly, kpi_label)
 cols = st.columns(len(tiles))
@@ -305,9 +286,26 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
     st.divider()
 
 
-# --- focus block (rendered when the query bar detects a focus_metric) --------------
-if _lens_spec is not None:
-    _render_focus_block(_lens_spec, weekly, kpi_label)
+# --- quick views + their dynamic focus block (control sits right above its output) --
+_PRESET_QUERIES = {
+    "Clicks":      "break down click performance",
+    "Budget":      "where is my budget going",
+    "ROAS":        "what is the ROAS",
+    "Impressions": "show impressions by channel",
+    "Conversions": "conversion breakdown",
+    "Engagement":  "engagement performance",
+}
+theme.action_title("Quick views",
+                   "Tap a lens to drop a focused breakdown in below; tap again to clear.")
+_picked = st.pills("Quick views", list(_PRESET_QUERIES), selection_mode="single",
+                   default=None, key="_quick_view", label_visibility="collapsed")
+if _picked:
+    _lens_spec = _parse_lens_cached(_PRESET_QUERIES[_picked])
+    st.session_state["lens_spec"] = _lens_spec
+    _render_focus_block(_lens_spec, weekly, kpi_label)   # renders its own divider
+else:
+    st.session_state.pop("lens_spec", None)
+    st.divider()
 
 # --- block 1: headline KPI + trend ------------------------------------------------
 b = insights.kpi_trend_insight(weekly, kpi_label)
