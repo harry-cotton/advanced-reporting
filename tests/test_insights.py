@@ -89,7 +89,8 @@ def test_pacing_verdicts(total, expected):
 
 
 def _hist_with_audiences() -> pd.DataFrame:
-    """Minimal history stand-in: 2 decoded audience rows per week across 4 weeks."""
+    """Minimal history stand-in: 3 decoded audience rows per week across 4 weeks
+    (two PROSPECT audiences with a 2.5x spread, one lone RETARGET)."""
     dates = pd.date_range("2026-01-05", periods=4, freq="W-MON")
     rows = []
     for d in dates:
@@ -98,13 +99,19 @@ def _hist_with_audiences() -> pd.DataFrame:
                      "ad_group": "PROSPECT_LAL-1PCT_FEED",
                      "audience_type": "PROSPECT", "audience_detail": "LAL-1PCT",
                      "creative": "", "creative_format": "",
-                     "spend": 500.0, "conversions": 25.0})
+                     "spend": 500.0, "conversions": 25.0})    # $20 / claimed conv
+        rows.append({"date": d, "channel": "meta",
+                     "campaign": "US_META_CONVERT_PROSPECT",
+                     "ad_group": "PROSPECT_INT-GRADS_FEED",
+                     "audience_type": "PROSPECT", "audience_detail": "INT-GRADS",
+                     "creative": "", "creative_format": "",
+                     "spend": 500.0, "conversions": 10.0})    # $50 / claimed conv
         rows.append({"date": d, "channel": "meta",
                      "campaign": "US_META_CONVERT_RETARGET",
                      "ad_group": "RETARGET_SITE-90D_FEED",
                      "audience_type": "RETARGET", "audience_detail": "SITE-90D",
                      "creative": "", "creative_format": "",
-                     "spend": 500.0, "conversions": 5.0})
+                     "spend": 500.0, "conversions": 50.0})    # $10 — cheap, warm, alone
     return pd.DataFrame(rows)
 
 
@@ -122,16 +129,25 @@ def test_topline_summary_degrades_to_claimed():
     assert "×" not in s                         # no claim ratio without measured
 
 
-def test_audience_callout_best_worst():
+def test_audience_callout_compares_within_one_type():
     hist = _hist_with_audiences()
     b = insights.audience_callout_insight(hist)
     assert b is not None
-    # PROSPECT·LAL-1PCT: cost=20, RETARGET·SITE-90D: cost=100 → mult=5
-    assert b["mult"] == pytest.approx(5.0, abs=0.01)
-    assert b["best"]["audience_type"] == "PROSPECT"
-    assert b["worst"]["audience_type"] == "RETARGET"
-    assert "5.0×" in b["title"]
+    # RETARGET ($10) is globally cheapest but stands alone — the callout must NOT
+    # cross types (warm converts cheaper by construction). Within PROSPECT:
+    # LAL-1PCT $20 vs INT-GRADS $50 → 2.5x.
+    assert b["best"]["audience_type"] == b["worst"]["audience_type"] == "PROSPECT"
+    assert b["mult"] == pytest.approx(2.5, abs=0.01)
+    assert "Among PROSPECT audiences" in b["title"]
     assert "platform-claimed" in b["narrative"].lower()
+    assert "within one audience type" in b["narrative"].lower()
+
+
+def test_audience_callout_returns_none_without_same_type_pair():
+    # one audience per type → no honest within-type comparison exists
+    hist = _hist_with_audiences()
+    hist = hist[hist["audience_detail"] != "INT-GRADS"]
+    assert insights.audience_callout_insight(hist) is None
 
 
 def test_audience_callout_returns_none_without_ad_level():

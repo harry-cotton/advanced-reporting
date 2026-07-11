@@ -193,13 +193,15 @@ def metric_card(label: str, value: str, delta: str | None = None,
                       f'color:{color};margin-top:0.3rem">'
                       f'{arrow}{_html_inline(delta)}</div>')
 
-    tooltip = f' title="{help}"' if help else ""
+    esc_help = (str(help).replace("&", "&amp;").replace('"', "&quot;")
+                .replace("<", "&lt;").replace(">", "&gt;")) if help else ""
+    tooltip = f' title="{esc_help}"' if help else ""
     st.markdown(
         f'<div{tooltip} style="background:{PAPER};border:1px solid {GRID};'
         f'border-radius:8px;padding:1.1rem 1.25rem">'
         f'<div style="font-family:{SANS};font-size:0.78rem;font-weight:600;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{INK_SOFT};'
-        f'margin-bottom:0.35rem">{label}</div>'
+        f'margin-bottom:0.35rem">{_html_inline(label)}</div>'
         f'<div style="font-family:{SANS};font-size:1.55rem;font-weight:700;'
         f'line-height:1.15;color:{INK}">{_html_inline(value)}</div>'
         f'{delta_html}</div>',

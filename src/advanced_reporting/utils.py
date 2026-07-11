@@ -117,10 +117,14 @@ def load_naming_overrides(path: str | Path | None = None) -> dict:
     with keys normalized (lowercased, whitespace-collapsed) for separator-agnostic
     matching. Absent file -> ``{}`` (grammar-only decode; nothing overridden).
     """
+    # lazy import: shares the ONE normalizer with the decoder, so crosswalk keys and
+    # lookups can never drift apart (and no import cycle at module load)
+    from .ingestion.naming_decode import norm_key
+
     root = project_root()
     p = Path(path) if path is not None else root / "config" / "naming_overrides.yaml"
     if not p.exists():
         return {}
     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     raw = data.get("ad_group_overrides") or {}
-    return {re.sub(r"\s+", " ", str(k).strip().lower()): (v or {}) for k, v in raw.items()}
+    return {norm_key(k): (v or {}) for k, v in raw.items()}

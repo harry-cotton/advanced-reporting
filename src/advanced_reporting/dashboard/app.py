@@ -300,11 +300,9 @@ theme.action_title("Quick views",
 _picked = st.pills("Quick views", list(_PRESET_QUERIES), selection_mode="single",
                    default=None, key="_quick_view", label_visibility="collapsed")
 if _picked:
-    _lens_spec = _parse_lens_cached(_PRESET_QUERIES[_picked])
-    st.session_state["lens_spec"] = _lens_spec
-    _render_focus_block(_lens_spec, weekly, kpi_label)   # renders its own divider
+    _render_focus_block(_parse_lens_cached(_PRESET_QUERIES[_picked]), weekly,
+                        kpi_label)                       # renders its own divider
 else:
-    st.session_state.pop("lens_spec", None)
     st.divider()
 
 # --- block 1: headline KPI + trend ------------------------------------------------

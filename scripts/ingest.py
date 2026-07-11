@@ -43,7 +43,9 @@ def main(argv=None) -> None:
                          "never delete) BEFORE pulling fresh — use after a schema change")
     args = ap.parse_args(argv)
 
-    if args.reset and not args.consolidate_only:
+    # --inbox handles --reset itself (it archives the sources the folder actually
+    # feeds); here --reset applies to the single --source being pulled
+    if args.reset and not args.consolidate_only and args.inbox is None:
         res = store.archive_source(args.source)
         if res["moved"]:
             print(f"Archived {len(res['moved'])} file(s) from '{args.source}' -> "
@@ -70,13 +72,24 @@ def main(argv=None) -> None:
                   "(see data/inbox/README.md).")
             return
         print(f"Ingesting from {inbox}")
-        ok = 0
+        parsed = []
         for f in files:
             try:
                 source, df = read_export(f)
             except Exception as e:            # one bad file must not block the rest
                 print(f"  SKIPPED {f.name}: {e}")
                 continue
+            parsed.append((f, source, df))
+        if args.reset:
+            # archive the sources THIS folder feeds (not config data.source), so a
+            # re-ingest after a crosswalk/schema change starts those sources clean
+            for src in sorted({s for _f, s, _df in parsed}):
+                res = store.archive_source(src)
+                if res["moved"]:
+                    print(f"  archived {len(res['moved'])} old file(s) for '{src}' -> "
+                          f"{Path(res['archive_dir']).relative_to(ROOT)}")
+        ok = 0
+        for f, source, df in parsed:
             path = store.write_pull(df, source)
             print(f"  {f.name} -> {source}: {len(df):,} rows -> {path.relative_to(ROOT)}")
             if "ad_group" in df.columns:

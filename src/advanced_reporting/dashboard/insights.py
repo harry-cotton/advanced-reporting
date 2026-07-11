@@ -469,13 +469,11 @@ def topline_summary(weekly: pd.DataFrame, kpi_label: str = "key events") -> str:
               f"**{_money(dear['cost_per'])}**.")
 
     s3 = ""
-    if measured and "conversions" in weekly.columns:
-        claimed = float(paid["conversions"].sum())
-        if claimed > 0 and total_out > 0:
-            ratio = claimed / total_out
-            s3 = (f" The platforms claim **{ratio:.1f}×** more conversions than "
-                  f"analytics can verify — the **{kpi_label}** figures are "
-                  "the consistent yardstick throughout this report.")
+    cv = claims_vs_measured_insight(weekly, kpi_label)   # same ratio as the block below
+    if cv:
+        s3 = (f" The platforms claim **{cv['overall_ratio']:.1f}×** more conversions "
+              f"than analytics can verify — the **{kpi_label}** figures are "
+              "the consistent yardstick throughout this report.")
 
     return s1 + s2 + s3
 
@@ -509,19 +507,29 @@ def audience_callout_insight(hist: pd.DataFrame) -> dict | None:
     per["cost_per_claimed"] = per["spend"] / per["conversions"]
     per = per.sort_values("cost_per_claimed").reset_index(drop=True)
 
-    best, worst = per.iloc[0], per.iloc[-1]
+    # Compare WITHIN one audience type only: warm (retargeting) audiences convert
+    # cheaper than cold prospecting by construction, so a cross-type "X beats Y"
+    # headline would be exactly the misleading claim the Audiences page warns about.
+    # Take the type with the widest within-type spread (needs >=2 audiences of a type).
+    groups = [g for _, g in per.groupby("audience_type", sort=False) if len(g) >= 2]
+    if not groups:
+        return None
+    grp = max(groups, key=lambda g: (g["cost_per_claimed"].iloc[-1]
+                                     / g["cost_per_claimed"].iloc[0]))
+    best, worst = grp.iloc[0], grp.iloc[-1]
     mult = worst["cost_per_claimed"] / best["cost_per_claimed"]
+    atype = best["audience_type"]
 
-    title = (f"{best['audience_type']} · {best['audience_detail']} converts at "
-             f"{mult:.1f}× less cost than "
-             f"{worst['audience_type']} · {worst['audience_detail']}")
+    title = (f"Among {atype} audiences, {best['audience_detail']} converts at "
+             f"{mult:.1f}× less cost than {worst['audience_detail']}")
     narrative = (
-        f"At the audience level, **{best['audience_type']} · {best['audience_detail']}** "
-        f"delivers claimed conversions at **{_money(best['cost_per_claimed'])}** each — "
-        f"**{mult:.1f}×** more efficient than "
-        f"**{worst['audience_type']} · {worst['audience_detail']}** "
-        f"at {_money(worst['cost_per_claimed'])}. "
-        "_All audience figures are platform-claimed; the Audiences page has the full ranking._"
+        f"Within the **{atype}** audiences, **{best['audience_detail']}** delivers "
+        f"claimed conversions at **{_money(best['cost_per_claimed'])}** each — "
+        f"**{mult:.1f}×** more efficient than **{worst['audience_detail']}** at "
+        f"{_money(worst['cost_per_claimed'])}. "
+        "_Comparisons stay within one audience type: warm retargeting audiences convert "
+        "cheaper than cold prospecting by construction. All audience figures are "
+        "platform-claimed; the Audiences page has the full ranking._"
     )
     return {
         "title": title, "narrative": narrative, "per_audience": per,
