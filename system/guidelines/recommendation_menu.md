@@ -14,8 +14,7 @@
 | `scale_with_test` | MMM ROI interval entirely above 1 AND spend below saturation midpoint | interval bounds, saturation position |
 | `cut_or_restructure` | MMM ROI interval entirely below 1 | interval bounds |
 | `unlock_mmm` | no business-KPI series exists | what matchback would add |
-| TODO(Harry): pacing, creative-refresh, seasonality types… | | |
 
-Rules: max N recommendations per report (TODO: pick N ≈ 3–5); ordered by money at
-stake; every one labeled with its evidence grade (platform-claimed / analytics-
-measured / modeled).
+Approved by Harry 2026-07-12. Rules: **max 3 recommendations per report**; ordered by
+money at stake; every one labeled with its evidence grade (platform-claimed /
+analytics-measured / modeled).
