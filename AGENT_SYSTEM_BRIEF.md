@@ -1,6 +1,7 @@
 # Build brief — the Agent System (guided reporting)
 
-**STATUS: APPROVED DESIGN, NOT YET BUILT** (agreed 2026-07-11).
+**STATUS: A1 BUILT + VERIFIED 2026-07-11 (spec agent live-run pending API key on this
+machine); A2 NEXT.** Design agreed 2026-07-11.
 **Owner:** Harry. Treat as the spec; ask before large architectural changes.
 
 ## The one-line design

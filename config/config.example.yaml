@@ -40,11 +40,20 @@ quality:
   spike_factor: 3.0           # flag a week if channel x geo spend > N x the prior week
   fill_freq: W-MON            # calendar grain for gap-filling missing weeks
 
+agent:
+  # The report-spec agent (scripts/advise.py --spec). Runs at PIPELINE TIME only —
+  # sends system/ knowledge + compact computed summaries (never raw rows) to the
+  # model API. Set enabled: false for engagements whose confidentiality terms
+  # forbid third-party processing (see system/context/client_brief.template.md).
+  enabled: true
+  model: claude-sonnet-5
+
 reporting:
   output_dir: outputs
   # Label for the analytics-measured outcome (GA4 key events) in dashboard prose,
   # e.g. "start applications" for the MBA scenario. Default: "key events".
-  kpi_label: key events
+  # Leave unset to let the report-spec agent fill it (an explicit value here wins).
+  # kpi_label: key events
   # Optional spend plan for the Overview pacing block. Leave null to show run
   # rate instead of pacing-vs-plan.
   budget: null

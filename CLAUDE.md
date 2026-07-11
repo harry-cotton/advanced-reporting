@@ -19,7 +19,7 @@ live data connectors, and agentic reporting.
 - When Harry pastes a brief or idea from Cowork, treat it as the spec. Ask before large
   architectural changes; prefer Plan mode for anything non-trivial.
 
-## Architecture — six layers (`src/advanced_reporting/`)
+## Architecture — seven layers (`src/advanced_reporting/`)
 
 **Data flow:** `scripts/ingest.py` (extract → durable store) → `scripts/run_pipeline.py`
 (clean → model → report). Extraction is **decoupled** from modeling: pulls accumulate in a
@@ -76,7 +76,17 @@ store the pipeline reads from, so history grows over time. A second, forward pat
    `plotly_chart()` house-style helper every chart goes through; `drilldown.py` the
    pure-pandas aggregations (its `ad_group_table` structurally carries NO key_events —
    GA4 measures at campaign grain only).
-6. **`planner/`** — turns *goals + rails* into a validated **`CampaignPlan`** that feeds the
+6. **`agent/`** — the agent system (AGENT_SYSTEM_BRIEF.md): agents CONFIGURE, the engine
+   COMPUTES, agents NARRATE. **A1 (built):** `knowledge.py` (system/ loaders),
+   `summaries.py` (compact computed summaries + the data hash — never raw rows),
+   `spec_agent.py` (one structured call at pipeline time → `outputs/report_spec.json`,
+   cached per data-hash), `validate.py` (clip to metric registry / block catalog /
+   tier enums — planner-rails style). `scripts/advise.py --spec` runs it; the dashboard
+   gap-fills from the spec (kpi_label, targets, default tier, block order) with explicit
+   config always winning; no key / no spec → behavior unchanged. `agent.enabled: false`
+   in config is the per-engagement data-egress opt-out. A2 (commentary + number guard +
+   recommendation menu) is next — see the brief.
+7. **`planner/`** — turns *goals + rails* into a validated **`CampaignPlan`** that feeds the
    naming generator (Plan rows → names + UTMs). Same spine as `lens.py`: deterministic default
    + a **guarded LLM path** (one structured call — model set in rails `llm.model`, Sonnet-class default — when a key is
    set). The **LLM only selects/justifies, clipped to the rails** (it can't invent options or
@@ -150,6 +160,7 @@ python scripts/ingest.py --source synthetic    # extract -> immutable pulls -> h
 python scripts/run_pipeline.py                 # store -> clean -> MMM -> outputs/ (charts, commentary, data_quality.md)
 python scripts/run_pipeline.py --lens "awareness campaign"   # also writes outputs/lens_report.md
 python scripts/plan_campaign.py --goal awareness --budget 100000  # goals+rails -> CampaignPlan -> names/UTMs
+python scripts/advise.py --spec                # A1: report-spec agent -> outputs/report_spec.json (needs key)
 streamlit run src/advanced_reporting/dashboard/app.py        # KPI pyramid + goal lens + free-text lens box
 pytest -q
 ```

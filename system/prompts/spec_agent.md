@@ -23,11 +23,14 @@ Return a report spec:
 - campaign_type: one of the types defined in the guidelines
 - kpi_label: the human name for the primary outcome (e.g. "start applications")
 - primary_tier: reach | intent | outcome
-- targets: per metric key, {goal | good/warn} bands JUSTIFIED by the playbook or the
-  client brief — omit a metric rather than invent a band
+- targets: a list of {metric, goal, good, warn} entries — bands JUSTIFIED by the
+  playbook or the client brief; omit a metric rather than invent a band. good/warn
+  follow the metric's direction (costs: good <= warn; rates: good >= warn); goal
+  turns a volume metric into a pacing bar
 - blocks: which insight blocks to show, in order, from the fixed catalog: {catalog}
 - watch_flags: up to 3 things the analyst should look at first, each naming the
   computed evidence that triggered it
+- rationale: 1–3 sentences on why this classification, for the analyst's review
 
 ## Rules
 - Choose only from vocabularies that exist (metric keys, block names, tiers).

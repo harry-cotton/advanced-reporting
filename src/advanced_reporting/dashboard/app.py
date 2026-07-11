@@ -18,6 +18,8 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
+from advanced_reporting.agent import load_active_spec  # noqa: E402
+from advanced_reporting.agent.validate import BLOCK_CATALOG  # noqa: E402
 from advanced_reporting.dashboard import filters, insights, theme  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
 from advanced_reporting.utils import load_config  # noqa: E402
@@ -53,7 +55,10 @@ weekly_all = _load_weekly(str(metrics_f), metrics_f.stat().st_mtime)
 hist_all = _load_hist(str(history_f), history_f.stat().st_mtime) if history_f.exists() else None
 cfg = load_config()
 rep = cfg.get("reporting", {}) or {}
-kpi_label = rep.get("kpi_label", "key events")
+# The report spec (outputs/report_spec.json, written by scripts/advise.py --spec)
+# fills the gaps config leaves; explicit config keys always win. No spec -> {}.
+spec, spec_note = load_active_spec(ROOT)
+kpi_label = rep.get("kpi_label") or spec.get("kpi_label") or "key events"
 budget_cfg = rep.get("budget")
 
 # --- global sidebar filters (date + channel, carry across every tab) ---------------
@@ -75,6 +80,17 @@ n_paid = len(insights._paid_channels(weekly))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
            "below is computed from the weekly tables — no generated commentary. "
            "Click a channel in any bar/donut to focus the whole dashboard on it.")
+if spec_note:
+    st.caption(f"⚠ {spec_note}")
+if spec:
+    st.caption("Layout, labels and gauge bands arranged by the report-spec agent "
+               "(`outputs/report_spec.json`) — every number stays deterministic; "
+               "explicit config keys override the spec.")
+    if spec.get("watch_flags"):
+        with st.expander("Agent watch flags — AI-selected from computed evidence, "
+                         "review before client use"):
+            for flag in spec["watch_flags"]:
+                st.markdown(f"- {flag}")
 filters.focus_chip()
 
 # --- executive tile row ------------------------------------------------------------
@@ -89,13 +105,18 @@ theme.lede(insights.topline_summary(weekly, kpi_label))
 
 # --- tier scorecard: Awareness / Engagement / Action goal gauges -------------------
 _TIER_BY_LABEL = {"Awareness": "reach", "Engagement": "intent", "Action": "outcome"}
+# The spec's primary_tier picks which tier the scorecard OPENS on (config has no
+# such key, so the spec can't be overridden here — the user can always click).
+_LABEL_BY_TIER = {v: k for k, v in _TIER_BY_LABEL.items()}
+_default_label = _LABEL_BY_TIER.get(spec.get("primary_tier"), "Awareness")
 st.markdown("")  # small breath before the segmented control
 _tier_label = st.segmented_control(
-    "View by tier", list(_TIER_BY_LABEL), default="Awareness",
+    "View by tier", list(_TIER_BY_LABEL), default=_default_label,
     key="_tier_lens", label_visibility="collapsed",
     help="Awareness → reach, Engagement → intent, Action → outcome (the KPI pyramid).")
-_tier = _TIER_BY_LABEL.get(_tier_label or "Awareness", "reach")
-_targets = rep.get("targets") or {}
+_tier = _TIER_BY_LABEL.get(_tier_label or _default_label, "reach")
+# targets: spec fills the gaps, explicit config wins per metric key
+_targets = {**(spec.get("targets") or {}), **(rep.get("targets") or {})}
 _sc = insights.tier_scorecard(weekly, _tier, targets=_targets, kpi_label=kpi_label)
 theme.action_title(f"{_sc['label']} — pacing and efficiency against goal")
 _scL, _scR = st.columns([3, 2])
@@ -307,9 +328,16 @@ if _picked:
 else:
     st.divider()
 
-# --- block 1: headline KPI + trend ------------------------------------------------
-b = insights.kpi_trend_insight(weekly, kpi_label)
-if b:
+# --- the insight blocks -------------------------------------------------------------
+# Each block is a named renderer in the fixed catalog (agent/validate.py
+# BLOCK_CATALOG); the report spec may select/reorder them, never add to them.
+# Default order = the catalog order = the pre-spec hardcoded order.
+
+
+def _block_kpi_trend() -> None:
+    b = insights.kpi_trend_insight(weekly, kpi_label)
+    if not b:
+        return
     with _narrow():
         theme.action_title(b["title"])
         fig = go.Figure()
@@ -325,9 +353,11 @@ if b:
         theme.prose(b["narrative"])
     st.divider()
 
-# --- block 2: claims vs measured (the signature honesty visual) -------------------
-b = insights.claims_vs_measured_insight(weekly, kpi_label)
-if b:
+
+def _block_claims_vs_measured() -> None:
+    b = insights.claims_vs_measured_insight(weekly, kpi_label)
+    if not b:
+        return
     with _narrow():
         theme.action_title(b["title"])
         per = b["per_channel"]
@@ -345,9 +375,11 @@ if b:
         theme.prose(b["narrative"])
     st.divider()
 
-# --- block 3: cost per outcome by channel -----------------------------------------
-b = insights.cost_per_outcome_insight(weekly, kpi_label)
-if b:
+
+def _block_cost_per_outcome() -> None:
+    b = insights.cost_per_outcome_insight(weekly, kpi_label)
+    if not b:
+        return
     with _narrow():
         theme.action_title(b["title"])
         per = b["per_channel"].sort_values("cost_per", ascending=True)
@@ -368,10 +400,13 @@ if b:
         theme.prose(b["narrative"])
     st.divider()
 
-# --- block 4: audience callout (requires history.parquet with decoded ad-level rows) --
-if hist is not None:
-    b = insights.audience_callout_insight(hist)
-    if b:
+
+def _block_audience_callout() -> None:
+    # requires history.parquet with decoded ad-level rows
+    if hist is not None:
+        b = insights.audience_callout_insight(hist)
+        if not b:
+            return
         with _narrow():
             theme.action_title(b["title"])
             per = b["per_audience"].head(6)
@@ -392,9 +427,10 @@ if hist is not None:
             theme.prose(b["narrative"])
         st.divider()
 
-# --- block 5: pacing + where the money goes -----------------------------------------
-b = insights.pacing_insight(weekly, budget_cfg)
-if b:
+def _block_pacing() -> None:
+    b = insights.pacing_insight(weekly, budget_cfg)
+    if not b:
+        return
     with _narrow():
         theme.action_title(b["title"])
         left, right = st.columns([5, 3])
@@ -429,6 +465,20 @@ if b:
                 theme.plotly_chart(fig, height=320, legend=True,
                                    select_key="sel_overview_mix"))
         theme.prose(b["narrative"])
+
+
+# --- render the blocks: spec selection/order, else the full catalog in default order
+_BLOCK_RENDERERS = {
+    "kpi_trend": _block_kpi_trend,
+    "claims_vs_measured": _block_claims_vs_measured,
+    "cost_per_outcome": _block_cost_per_outcome,
+    "audience_callout": _block_audience_callout,
+    "pacing": _block_pacing,
+}
+assert set(_BLOCK_RENDERERS) == set(BLOCK_CATALOG), \
+    "dashboard block renderers out of sync with agent BLOCK_CATALOG"
+for _name in (spec.get("blocks") or BLOCK_CATALOG):
+    _BLOCK_RENDERERS[_name]()
 
 # --- external-context aside (DEFERRED: hidden until curated notes exist) -----------
 notes = insights.macro_context(cfg)
