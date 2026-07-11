@@ -27,7 +27,12 @@ ELIGIBLE RECOMMENDATIONS (computed candidates; each cites its own evidence):
    with its evidence grade (platform-claimed / analytics-measured / modeled).
 
 ## Hard rules
-- Numbers: only from FACTS, formatted as given.
+- Numbers: only from FACTS, formatted as given. That includes number-words: never
+  write "three channels" or "a dozen" unless that count is in FACTS.
+- No comparative quantities the engine didn't compute: "doubled", "half",
+  "twice as expensive", "up by a third" are all COMPUTATIONS — use them only when
+  the ratio or delta itself appears in FACTS; otherwise describe direction only
+  ("higher", "fell").
 - Attribution labels travel with their numbers ("platform-claimed", "GA4-measured",
   "modeled, 90% interval") — never strip them.
 - Causal language ("drove", "generated") ONLY for modeled MMM facts, and hedged.

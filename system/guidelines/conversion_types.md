@@ -49,3 +49,6 @@ they barely needed.
   outcomes; never blend the two in one series.
 - CRM lag is real: the latest 1–2 weeks are always understated — commentary must not
   read the last fortnight's "drop" as performance (cohort it or exclude it).
+- **Always report the match RATE alongside matchback results** ("62% of CRM records
+  matched to a touch") — without it, matchback silently becomes attribution among
+  the matchable, and the unmatched share is where the story often hides.

@@ -73,6 +73,14 @@ Second guarded call, also offline, writing `outputs/commentary_ai.md`:
   guard** (`agent/guards.py`): every numeral in the output must match a value in the
   input payload (after format normalization) — on mismatch the artifact is REJECTED
   and the failure printed, never published. (The proposal-agent guard, ported.)
+  Normalization must cover (advisor review 2026-07-11): number-WORDS ("three
+  channels", "a dozen") → digits before matching; currency/percent/thousands
+  formatting variants. Matching stays EXACT after normalization — no tolerance,
+  ever (a "close enough" guard is no guard). Comparative quantities that carry no
+  numeral ("nearly doubled", "roughly half", "twice as expensive") assert
+  computations too: the prompt bans them unless the ratio/delta itself is in FACTS —
+  so the engine should compute the common deltas/ratios INTO the facts payload,
+  making the useful comparisons legal instead of forbidden.
 - **Recommendations rule:** deterministic code first computes the *eligible*
   recommendation candidates (the `commentary.py` flag branches + allocator outputs
   when an MMM exists), each tagged with its `recommendation_menu.md` type. The agent
@@ -88,6 +96,25 @@ Second guarded call, also offline, writing `outputs/commentary_ai.md`:
 **Acceptance:** commentary renders with the stamp; corrupting one number in a test
 payload makes the guard reject; recommendations only ever cite menu types; no key →
 everything works with the AI section absent.
+
+## Golden-set evals (part of A1/A2 acceptance, not optional)
+
+The AI layer gets the same regression discipline as the 190+ deterministic tests.
+`tests/test_agent_evals.py` runs 5–6 fixture scenarios (gov awareness, higher-ed
+conversion near deadline, recruitment, broken-tracking with a ~4x claim ratio,
+thin-data) through spec + commentary with MOCKED model responses (CI-safe; an
+optional live smoke test behind the API key) and asserts:
+- campaign_type and primary_tier correct per scenario;
+- the guard rejects a deliberately corrupted payload;
+- every recommendation ∈ the computed eligible set;
+- forbidden framings absent (string checks: no CPA-grading in awareness scenarios,
+  no cross-channel CPM comparisons, no unlabeled conversion numbers).
+
+## Model routing (decided 2026-07-11)
+
+Sonnet-class for both agents initially (`agent.model` in config, gateway default).
+The spec agent is a downshift-to-Haiku candidate once evals pass on it. One call
+per pipeline run → cost is pennies; do NOT engineer prompt caching for this.
 
 ## Phase A3 — later, not now
 
