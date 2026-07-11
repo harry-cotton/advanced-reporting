@@ -37,8 +37,11 @@ VERDICT_INK = {"good": POSITIVE, "warn": "#B26A00", "bad": NEGATIVE}
 CLAIMED = "#E08A00"
 MEASURED = "#1F4E79"
 
-SERIF = "Georgia, 'Times New Roman', serif"          # editorial headlines
-SANS = "'Source Sans Pro', 'Segoe UI', sans-serif"   # body / chart text
+# Editorial type: Fraunces (display serif) + Source Sans 3, loaded from Google Fonts in
+# inject_css with system fallbacks — if the CDN is blocked (corporate proxy / offline),
+# everything degrades to Georgia/Segoe and nothing breaks.
+SERIF = "'Fraunces', Georgia, 'Times New Roman', serif"
+SANS = "'Source Sans 3', 'Source Sans Pro', 'Segoe UI', sans-serif"
 
 CHANNEL_COLORS = {
     "google_search": "#3B6FB5",
@@ -81,6 +84,7 @@ _NAV_PAGES = [
     ("Exec Summary", "app.py"),
     ("Channels",     "pages/1_Channels.py"),
     ("Audiences",    "pages/2_Audiences.py"),
+    ("Results",      "pages/5_Results.py"),
     ("Data Quality", "pages/3_Data_Quality.py"),
     ("Explore",      "pages/4_Explore.py"),
 ]
@@ -90,6 +94,8 @@ def inject_css() -> None:
     """Editorial typography: serif headlines, calmer captions. Call once per page."""
     st.markdown(
         f"""<style>
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:wght@400;600;700&display=swap');
+
         h1, h2, h3,
         [data-testid="stHeading"] h1, [data-testid="stHeading"] h2,
         [data-testid="stHeading"] h3,
@@ -203,7 +209,7 @@ def metric_card(label: str, value: str, delta: str | None = None,
         f'letter-spacing:0.04em;text-transform:uppercase;color:{INK_SOFT};'
         f'margin-bottom:0.35rem">{_html_inline(label)}</div>'
         f'<div style="font-family:{SANS};font-size:1.55rem;font-weight:700;'
-        f'line-height:1.15;color:{INK}">{_html_inline(value)}</div>'
+        f'line-height:1.15;color:{INK};white-space:nowrap">{_html_inline(value)}</div>'
         f'{delta_html}</div>',
         unsafe_allow_html=True,
     )
@@ -363,13 +369,23 @@ def annotate(fig: go.Figure, x, y, text: str, *, above: bool = True) -> go.Figur
 
 
 def plotly_chart(fig: go.Figure, *, yfmt: str | None = None, xfmt: str | None = None,
-                 height: int = 380, legend: bool = True) -> None:
-    """THE way to render a chart: house style + quiet chrome. All pages use this."""
+                 height: int = 380, legend: bool = True, select_key: str | None = None):
+    """THE way to render a chart: house style + quiet chrome. All pages use this.
+
+    Pass ``select_key`` to make the chart CLICKABLE (cross-filtering): the call then
+    returns Streamlit's selection event — feed it to ``filters.handle_channel_click``.
+    Clickable traces must carry the channel key in ``customdata`` (one entry per point).
+    """
     style_fig(fig, yfmt=yfmt, xfmt=xfmt, height=height, legend=legend)
     # theme=None: the house style owns the figure — Streamlit's plotly template
     # otherwise overrides fonts/colors and injects a stray empty title
-    st.plotly_chart(fig, use_container_width=True, theme=None,
-                    config={"displayModeBar": False})
+    kwargs = dict(use_container_width=True, theme=None,
+                  config={"displayModeBar": False})
+    if select_key:
+        return st.plotly_chart(fig, key=select_key, on_select="rerun",
+                               selection_mode="points", **kwargs)
+    st.plotly_chart(fig, **kwargs)
+    return None
 
 
 # ---------------------------------------------------------------- combo (bar + line)
@@ -408,9 +424,81 @@ def combo_fig(x, bar_y, line_y, *, bar_name: str, line_name: str,
     return fig
 
 
-def combo(x, bar_y, line_y, **kwargs) -> None:
-    """Render a bar+line combo: build via ``combo_fig`` + house-style chrome."""
+def combo(x, bar_y, line_y, **kwargs):
+    """Render a bar+line combo: build via ``combo_fig`` + house-style chrome.
+
+    ``customdata=[...]`` (per bar) + ``select_key=`` make the bars clickable.
+    """
     height = kwargs.pop("height", 340)
+    select_key = kwargs.pop("select_key", None)
+    customdata = kwargs.pop("customdata", None)
     fig = combo_fig(x, bar_y, line_y, height=height, **kwargs)
-    st.plotly_chart(fig, use_container_width=True, theme=None,
-                    config={"displayModeBar": False})
+    if customdata is not None:
+        fig.data[0].customdata = list(customdata)
+    kw = dict(use_container_width=True, theme=None, config={"displayModeBar": False})
+    if select_key:
+        return st.plotly_chart(fig, key=select_key, on_select="rerun",
+                               selection_mode="points", **kw)
+    st.plotly_chart(fig, **kw)
+    return None
+
+
+# ---------------------------------------------------------------- readable comparisons
+def dumbbell_fig(labels, x_from, x_to, *, from_name: str, to_name: str,
+                 fmt: str = "pct", height: int | None = None) -> go.Figure:
+    """Dumbbell / slope-in-x chart: one row per item, a quiet dot (from) connected to a
+    strong dot (to). Replaces crowded few-point scatters — gain/loss reads instantly
+    (green segment = ``to`` above ``from``, red = below).
+    """
+    fig = go.Figure()
+    for lab, a, b in zip(labels, x_from, x_to):
+        fig.add_scatter(x=[a, b], y=[lab, lab], mode="lines", showlegend=False,
+                        line=dict(color=POSITIVE if b >= a else NEGATIVE, width=3),
+                        opacity=0.6, hoverinfo="skip")
+    fig.add_scatter(x=list(x_from), y=list(labels), mode="markers", name=from_name,
+                    marker=dict(size=11, color=PAPER,
+                                line=dict(color=INK_SOFT, width=2)))
+    fig.add_scatter(x=list(x_to), y=list(labels), mode="markers", name=to_name,
+                    marker=dict(size=12, color=ACCENT))
+    style_fig(fig, xfmt=fmt, height=height or (110 + 44 * len(list(labels))))
+    fig.update_layout(hovermode="closest")
+    fig.update_yaxes(showgrid=False, tickformat=None, autorange="reversed")
+    fig.update_xaxes(showgrid=True, gridcolor=GRID)
+    return fig
+
+
+def paired_bars_fig(labels, x1, x2, *, name1: str, name2: str,
+                    fmt1: str = "currency", fmt2: str = "currency",
+                    colors1=None, colors2=None, customdata=None,
+                    height: int | None = None) -> go.Figure:
+    """Two aligned horizontal bar panels sharing the category axis — the readable
+    replacement for a few-point bubble scatter (rank on the left, context on the right).
+    """
+    from plotly.subplots import make_subplots
+
+    def _txt(vals, fmt):
+        dollar = "$" if str(fmt).startswith(("currency", "$")) else ""
+        return [f"{dollar}{v:,.2f}" if abs(v) < 100 else f"{dollar}{v:,.0f}"
+                for v in vals]
+
+    labels = list(labels)
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.06,
+                        subplot_titles=(name1, name2))
+    fig.add_bar(y=labels, x=list(x1), orientation="h", name=name1,
+                marker_color=colors1 or ACCENT, customdata=customdata,
+                text=_txt(x1, fmt1), textposition="outside",
+                cliponaxis=False, row=1, col=1)
+    fig.add_bar(y=labels, x=list(x2), orientation="h", name=name2,
+                marker_color=colors2 or GRID, customdata=customdata,
+                text=_txt(x2, fmt2), textposition="outside",
+                cliponaxis=False, row=1, col=2)
+    style_fig(fig, height=height or (120 + 48 * len(labels)), legend=False)
+    fig.update_layout(hovermode="closest")
+    fig.update_yaxes(showgrid=False, autorange="reversed")
+    fig.update_xaxes(showgrid=True, gridcolor=GRID,
+                     tickformat=TICKFORMAT.get(fmt1, fmt1), row=1, col=1)
+    fig.update_xaxes(showgrid=True, gridcolor=GRID,
+                     tickformat=TICKFORMAT.get(fmt2, fmt2), row=1, col=2)
+    for ann in fig.layout.annotations:        # subplot titles -> quiet house captions
+        ann.font = dict(family=SANS, size=12, color=INK_SOFT)
+    return fig

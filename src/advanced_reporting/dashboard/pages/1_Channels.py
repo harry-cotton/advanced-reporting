@@ -48,6 +48,7 @@ _dr, _chsel = filters.sidebar_filters(
     weekly["date"].min().date(), weekly["date"].max().date())
 weekly = filters.apply(weekly, _dr, _chsel)
 hist = filters.apply(hist, _dr, _chsel)
+filters.focus_chip()
 if weekly.empty:
     st.info("No rows for the current filter — widen the date range or channel selection.")
     st.stop()
@@ -91,25 +92,30 @@ top_ch = ch_agg.iloc[0]["channel"]
 top_share = ch_agg.iloc[0]["spend"] / ch_agg["spend"].sum()
 theme.action_title(
     f"{theme.channel_label(top_ch)} takes {top_share * 100:.0f}% of paid spend",
-    "Bars = spend by channel, line = CPM (cost per 1,000 impressions).")
+    "Bars = spend by channel, line = CPM (cost per 1,000 impressions). "
+    "Click a bar or slice to focus every chart on that channel.")
 _left, _right = st.columns([2, 1])
 with _left:
     _bc, _lc = theme.COMBO_PAIRS["blue_amber"]
-    theme.combo([theme.channel_label(c) for c in ch_agg["channel"]],
-                ch_agg["spend"], ch_agg["cpm"], bar_name="Spend", line_name="CPM",
-                bar_fmt="currency", line_fmt="currency", y2_title="CPM",
-                bar_color=_bc, line_color=_lc, height=360)
+    _ev = theme.combo([theme.channel_label(c) for c in ch_agg["channel"]],
+                      ch_agg["spend"], ch_agg["cpm"], bar_name="Spend", line_name="CPM",
+                      bar_fmt="currency", line_fmt="currency", y2_title="CPM",
+                      bar_color=_bc, line_color=_lc, height=360,
+                      customdata=list(ch_agg["channel"]), select_key="sel_spend_cpm")
+    filters.handle_channel_click(_ev)
 with _right:
     mix = insights.spend_mix(weekly)
     fig = go.Figure(go.Pie(
         labels=[theme.channel_label(c) for c in mix["channel"]],
         values=mix["spend"], hole=0.62, sort=False,
+        customdata=list(mix["channel"]),
         marker=dict(colors=[theme.channel_color(c, i)
                             for i, c in enumerate(mix["channel"])]),
         textinfo="percent", textfont=dict(size=12)))
     fig.update_layout(annotations=[dict(text="Spend<br>mix", showarrow=False,
                       font=dict(family=theme.SANS, size=14, color=theme.INK_SOFT))])
-    theme.plotly_chart(fig, height=360, legend=False)
+    filters.handle_channel_click(
+        theme.plotly_chart(fig, height=360, legend=False, select_key="sel_mix"))
 
 # --- spend & CPC by month (combo trend, readable in place of the old area) ----------
 _mo = weekly.copy()
@@ -124,26 +130,23 @@ theme.combo(mo["month"], mo["spend"], mo["cpc"], bar_name="Spend", line_name="CP
             bar_fmt="currency", line_fmt="currency", y2_title="CPC",
             bar_color=_bc, line_color=_lc, height=320)
 
-# --- efficiency view ----------------------------------------------------------------
+# --- efficiency view (paired bars: rank on the left, spend context on the right) ------
 eff = insights.cost_per_outcome_insight(weekly)
 if eff:
     theme.action_title(eff["title"])
-    per = eff["per_channel"]
-    outcome_col = "key_events" if eff["measured"] else "conversions"
-    fig = go.Figure()
-    for i, r in per.iterrows():
-        fig.add_scatter(
-            x=[r["spend"]], y=[r["cost_per"]], mode="markers+text",
-            text=[theme.channel_label(r["channel"])], textposition="top center",
-            textfont=dict(size=12, color=theme.INK_SOFT),
-            marker=dict(size=max(10.0, float(r[outcome_col]) ** 0.5),
-                        color=theme.channel_color(r["channel"], i), opacity=0.85),
-            name=theme.channel_label(r["channel"]))
-    fig.update_xaxes(title_text="Spend", title_font=dict(size=12))
-    fig.update_yaxes(title_text=f"Cost / {eff['outcome_label']}",
-                     title_font=dict(size=12))
-    theme.plotly_chart(fig, yfmt="currency", xfmt="currency", height=380, legend=False)
-    st.caption("Bubble size = outcome volume. "
+    per = eff["per_channel"].sort_values("cost_per")     # cheapest first, both panels
+    fig = theme.paired_bars_fig(
+        [theme.channel_label(c) for c in per["channel"]],
+        per["cost_per"], per["spend"],
+        name1=f"Cost / {eff['outcome_label']}", name2="Spend",
+        fmt1="currency", fmt2="currency",
+        colors1=[theme.channel_color(c, i) for i, c in enumerate(per["channel"])],
+        customdata=list(per["channel"]))
+    filters.handle_channel_click(
+        theme.plotly_chart(fig, height=120 + 52 * len(per), legend=False,
+                           select_key="sel_efficiency"))
+    st.caption("Cheapest first; the right panel shows how much budget sits at each "
+               "price. "
                + ("Outcomes are analytics-measured (GA4)." if eff["measured"]
                   else "Outcomes are platform-claimed — no analytics series yet."))
 

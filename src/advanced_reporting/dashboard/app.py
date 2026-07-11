@@ -73,7 +73,9 @@ st.title("How the campaign is doing")
 lo, hi = weekly["date"].min(), weekly["date"].max()
 n_paid = len(insights._paid_channels(weekly))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
-           "below is computed from the weekly tables — no generated commentary.")
+           "below is computed from the weekly tables — no generated commentary. "
+           "Click a channel in any bar/donut to focus the whole dashboard on it.")
+filters.focus_chip()
 
 # --- executive tile row ------------------------------------------------------------
 tiles = insights.headline_tiles(weekly, kpi_label)
@@ -332,12 +334,14 @@ if b:
         labels = [theme.channel_label(c) for c in per["channel"]]
         fig = go.Figure()
         fig.add_bar(x=labels, y=per["claimed"], name="Platform-claimed",
-                    marker_color=theme.CLAIMED,
+                    marker_color=theme.CLAIMED, customdata=list(per["channel"]),
                     text=[f"{r:.1f}x" for r in per["ratio"]], textposition="outside")
         fig.add_bar(x=labels, y=per["measured"], name="Analytics-measured",
-                    marker_color=theme.MEASURED)
+                    marker_color=theme.MEASURED, customdata=list(per["channel"]))
         fig.update_layout(barmode="group")
-        theme.plotly_chart(fig, yfmt="count", height=360)
+        filters.handle_channel_click(
+            theme.plotly_chart(fig, yfmt="count", height=360,
+                               select_key="sel_claims"))
         theme.prose(b["narrative"])
     st.divider()
 
@@ -350,13 +354,14 @@ if b:
         fig = go.Figure()
         fig.add_bar(
             y=[theme.channel_label(c) for c in per["channel"]], x=per["cost_per"],
-            orientation="h",
+            orientation="h", customdata=list(per["channel"]),
             marker_color=[theme.channel_color(c, i)
                           for i, c in enumerate(per["channel"])],
             text=[insights._money(v) for v in per["cost_per"]], textposition="outside")
         fig.update_layout(showlegend=False)
-        theme.plotly_chart(fig, xfmt="currency", height=60 + 52 * len(per),
-                           legend=False)
+        filters.handle_channel_click(
+            theme.plotly_chart(fig, xfmt="currency", height=60 + 52 * len(per),
+                               legend=False, select_key="sel_costper"))
         cap = ("per analytics-measured outcome" if b["measured"]
                else "per platform-claimed conversion")
         st.caption(f"Cost {cap}.")
@@ -412,6 +417,7 @@ if b:
             fig = go.Figure(go.Pie(
                 labels=[theme.channel_label(c) for c in mix["channel"]],
                 values=mix["spend"], hole=0.62, sort=False,
+                customdata=list(mix["channel"]),
                 marker=dict(colors=[theme.channel_color(c, i)
                                     for i, c in enumerate(mix["channel"])]),
                 textinfo="percent", textfont=dict(size=12)))
@@ -419,7 +425,9 @@ if b:
                 annotations=[dict(text="Spend<br>mix", showarrow=False,
                                   font=dict(family=theme.SANS, size=14,
                                             color=theme.INK_SOFT))])
-            theme.plotly_chart(fig, height=320, legend=True)
+            filters.handle_channel_click(
+                theme.plotly_chart(fig, height=320, legend=True,
+                                   select_key="sel_overview_mix"))
         theme.prose(b["narrative"])
 
 # --- external-context aside (DEFERRED: hidden until curated notes exist) -----------

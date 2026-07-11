@@ -13,6 +13,20 @@ import streamlit as st
 
 _K_DATES = "flt_date_range"
 _K_CHANNELS = "flt_channels"
+# Cross-filter staging: a chart click can't write the multiselect's key after the
+# widget has rendered this run (Streamlit forbids it), so clicks stage the new value
+# here + st.rerun(); sidebar_filters applies it BEFORE the widget instantiates.
+_K_PENDING = "flt_channels_pending"
+
+
+def toggle_channel(current: list | None, clicked: str) -> list:
+    """Cross-filter toggle: click a channel to focus on it, click it again to clear.
+
+    Pure (no Streamlit) — empty list means "all channels" (the multiselect convention).
+    """
+    if current and set(current) == {clicked}:
+        return []
+    return [clicked]
 
 
 def sidebar_filters(channels, date_min, date_max, *, show_channels: bool = True):
@@ -22,7 +36,8 @@ def sidebar_filters(channels, date_min, date_max, *, show_channels: bool = True)
     sanitised against the current options each run so a stale pick never errors the widget.
     """
     st.sidebar.markdown("**Filters**")
-    st.sidebar.caption("Apply across every tab.")
+    st.sidebar.caption("Apply across every tab. Clicking a channel in any chart "
+                       "focuses on it; clicking it again clears.")
 
     dkw = {} if _K_DATES in st.session_state else {"value": (date_min, date_max)}
     date_range = st.sidebar.date_input("Date range", min_value=date_min,
@@ -31,6 +46,8 @@ def sidebar_filters(channels, date_min, date_max, *, show_channels: bool = True)
     selected = None
     if show_channels:
         opts = sorted(channels)
+        if _K_PENDING in st.session_state:            # a chart click from last run
+            st.session_state[_K_CHANNELS] = st.session_state.pop(_K_PENDING)
         if _K_CHANNELS in st.session_state:
             st.session_state[_K_CHANNELS] = [
                 c for c in st.session_state[_K_CHANNELS] if c in opts]
@@ -39,6 +56,43 @@ def sidebar_filters(channels, date_min, date_max, *, show_channels: bool = True)
             ckw = {"default": opts}
         selected = st.sidebar.multiselect("Channels", opts, key=_K_CHANNELS, **ckw)
     return date_range, selected
+
+
+def handle_channel_click(event) -> None:
+    """Turn a house-chart selection event into the global channel cross-filter.
+
+    ``event`` is the return of ``theme.plotly_chart(..., select_key=...)`` (or None).
+    The clicked trace point must carry the channel key in ``customdata``. Toggles the
+    shared channel filter and reruns so every chart on the page refilters.
+    """
+    if not event:
+        return
+    try:
+        points = event.selection.points
+    except AttributeError:
+        points = (event.get("selection") or {}).get("points") or []
+    if not points:
+        return
+    ch = points[0].get("customdata")
+    if isinstance(ch, (list, tuple)):
+        ch = ch[0] if ch else None
+    if not ch:
+        return
+    new = toggle_channel(st.session_state.get(_K_CHANNELS), str(ch))
+    if new != st.session_state.get(_K_CHANNELS):
+        st.session_state[_K_PENDING] = new
+        st.rerun()
+
+
+def focus_chip() -> None:
+    """Show a dismissible "focused on X" chip when the cross-filter is a single channel."""
+    from .insights import channel_label
+    sel = st.session_state.get(_K_CHANNELS)
+    if sel and len(sel) == 1:
+        if st.button(f"✕  Focused on {channel_label(sel[0])} — show all channels",
+                     key="_xf_clear", type="secondary"):
+            st.session_state[_K_PENDING] = []
+            st.rerun()
 
 
 def apply(df: pd.DataFrame, date_range=None, channels=None, *,

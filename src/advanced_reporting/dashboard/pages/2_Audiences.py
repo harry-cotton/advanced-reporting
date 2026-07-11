@@ -109,23 +109,16 @@ with _right:
             f"{star['audience_type']} · {star['audience_detail']} wins "
             f"{star['claimed_share'] * 100:.0f}% of claimed conversions on "
             f"{star['spend_share'] * 100:.0f}% of spend",
-            "Above the line = earning more than its share of budget.")
-        fig = go.Figure()
-        lim = max(known["spend_share"].max(), known["claimed_share"].max()) * 1.2
-        fig.add_scatter(x=[0, lim], y=[0, lim], mode="lines", showlegend=False,
-                        line=dict(color=theme.GRID, width=1, dash="dot"))
-        for i, r in known.iterrows():
-            fig.add_scatter(
-                x=[r["spend_share"]], y=[r["claimed_share"]], mode="markers+text",
-                text=[f"{r['audience_type']} · {r['audience_detail']}"],
-                textposition="top center", textfont=dict(size=11, color=theme.INK_SOFT),
-                marker=dict(size=12, color=theme.ACCENT if r["audience_type"] == "PROSPECT"
-                            else theme.CLAIMED),
-                showlegend=False)
-        fig.update_xaxes(title_text="Share of spend", title_font=dict(size=12))
-        fig.update_yaxes(title_text="Share of claimed conversions",
-                         title_font=dict(size=12))
-        theme.plotly_chart(fig, xfmt="pct", yfmt="pct", height=400, legend=False)
+            "Budget share → claimed-conversion share. Green = earning more than its "
+            "share of budget; red = less.")
+        ranked = known.sort_values("claimed_share", ascending=False)
+        fig = theme.dumbbell_fig(
+            [f"{t} · {d}" for t, d in zip(ranked["audience_type"],
+                                          ranked["audience_detail"])],
+            ranked["spend_share"], ranked["claimed_share"],
+            from_name="Share of spend", to_name="Share of claimed conv.",
+            fmt="pct", height=400)
+        theme.plotly_chart(fig, height=400)
 
 # --- creative formats ------------------------------------------------------------------
 cre = drilldown.creative_summary(hist)

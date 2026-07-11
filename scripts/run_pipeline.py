@@ -66,7 +66,8 @@ def run(lens=None, sources=None, no_mmm=False):
         # descriptive mode: dashboard tables + non-causal commentary, no modeling.
         # Clear any PREVIOUS run's MMM artifacts — leaving them would let the dashboard
         # present a model fitted on a different dataset as if it were current.
-        for stale in ("channel_summary.csv", "contributions.csv", "fit_metrics.json"):
+        for stale in ("channel_summary.csv", "contributions.csv", "fit_metrics.json",
+                      "mmm_result.json"):
             (outdir / stale).unlink(missing_ok=True)
         from advanced_reporting.reporting.commentary import generate_descriptive_commentary
         (outdir / "commentary.md").write_text(
@@ -85,6 +86,18 @@ def run(lens=None, sources=None, no_mmm=False):
         result.contributions.to_csv(outdir / "contributions.csv", index=False)
         (outdir / "fit_metrics.json").write_text(json.dumps(result.fit_metrics, indent=2),
                                                  encoding="utf-8")
+        # full MMMResult persistence (dashboard Results page): fit + params + response
+        # curves + actual-vs-predicted. Engine-agnostic — Meridian writes the same shape.
+        (outdir / "mmm_result.json").write_text(json.dumps({
+            "engine": result.engine, "target": m["target"],
+            "fit_metrics": result.fit_metrics, "params": result.params,
+            "response_curves": {ch: {"spend": list(c["spend"]),
+                                     "response": list(c["response"]),
+                                     "mean_spend": c["mean_spend"]}
+                                for ch, c in result.response_curves.items()},
+            "dates": [ts.date().isoformat() for ts in result.dates],
+            "actual": list(result.actual), "predicted": list(result.predicted),
+        }, indent=2, default=float), encoding="utf-8")
 
         # 4. REPORT
         charts = plot_all(result, outdir)
