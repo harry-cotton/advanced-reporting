@@ -1,7 +1,11 @@
 # Build brief — the Agent System (guided reporting)
 
-**STATUS: A1 BUILT + VERIFIED 2026-07-11 (spec agent live-run pending API key on this
-machine); A2 NEXT.** Design agreed 2026-07-11.
+**STATUS: A1 + A2 BUILT + VERIFIED 2026-07-11 (live model runs pending API key on
+this machine — see "How to test" below); A3 PARKED.** Design agreed 2026-07-11.
+Known scope note: `rebalance_channel_budget` is never eligible yet — the menu
+requires allocator-only numbers and the planner-allocator isn't wired into the
+reporting path; wire `planner/allocator.py` against the persisted response curves
+to unlock it.
 **Owner:** Harry. Treat as the spec; ask before large architectural changes.
 
 ## The one-line design
@@ -127,6 +131,31 @@ MCP server exposing store/insights as tools. Park until A1/A2 earn their keep.
 Live per-pageload LLM calls; agents reading raw row-level data; auto-applied
 recommendations; letting the agent touch `history.parquet`, the store, or any
 pipeline math; generated macro/external context (curated notes only, as ever).
+
+## How to test the agent layer
+
+Three rings, cheapest first:
+
+1. **CI-safe (no key, runs everywhere):** `pytest -q` — `tests/test_agent.py` (A1:
+   loader, clipping, hash cache, mocked generate) + `tests/test_agent_evals.py`
+   (A2 golden set: eligibility per scenario — gov awareness, broken tracking 4.0x,
+   audience gap, naming, MMM headroom/cut; guard rejection on invented / reformatted
+   / number-word / multiplier-word output; publish/stale/no-key paths). Dashboard
+   render both ways via `streamlit.testing.v1.AppTest` (no spec = unchanged; spec
+   drives label/order/flags; AI section fresh vs stale) — the headless verify path.
+2. **Live smoke (needs `ANTHROPIC_API_KEY` in `.env`):** the same pytest run picks up
+   `test_live_spec_and_commentary_smoke` automatically (skipped without a key) —
+   real spec + commentary calls against the current store; a guard REJECTION counts
+   as a pass (loud, unpublished).
+3. **Full acceptance (the demo):** `python scripts/run_pipeline.py` →
+   `python scripts/advise.py --spec --commentary` → set `reporting.ai_commentary:
+   true` → `streamlit run src/advanced_reporting/dashboard/app.py`. Expect: the
+   Overview arranges itself (KPI label, opening tier, block order), watch flags in
+   the expander, the stamped AI commentary at the end, and every number identical
+   to a spec-less run. To see the staleness guard live, re-run the pipeline (the
+   data hash changes) and reload — spec and commentary both hide themselves with a
+   visible note until `advise.py` is re-run. The corrupted-number rejection case is
+   automated in the eval suite; don't hand-test it.
 
 ## Suggested kickoff for the implementing session
 

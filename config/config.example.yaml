@@ -54,6 +54,11 @@ reporting:
   # e.g. "start applications" for the MBA scenario. Default: "key events".
   # Leave unset to let the report-spec agent fill it (an explicit value here wins).
   # kpi_label: key events
+  # Show the AI-drafted commentary section (outputs/commentary_ai.md, written by
+  # scripts/advise.py --commentary) on the Overview. OFF by default: the
+  # deterministic narrative blocks remain the spine; the AI section is clearly
+  # stamped and number-guarded, but a human reviews it before a client sees it.
+  ai_commentary: false
   # Optional spend plan for the Overview pacing block. Leave null to show run
   # rate instead of pacing-vs-plan.
   budget: null

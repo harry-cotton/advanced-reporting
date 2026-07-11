@@ -84,8 +84,17 @@ store the pipeline reads from, so history grows over time. A second, forward pat
    tier enums — planner-rails style). `scripts/advise.py --spec` runs it; the dashboard
    gap-fills from the spec (kpi_label, targets, default tier, block order) with explicit
    config always winning; no key / no spec → behavior unchanged. `agent.enabled: false`
-   in config is the per-engagement data-egress opt-out. A2 (commentary + number guard +
-   recommendation menu) is next — see the brief.
+   in config is the per-engagement data-egress opt-out. **A2 (built):**
+   `recommendations.py` (deterministic eligibility per recommendation_menu.md — the agent
+   can never invent a type or number; `rebalance_channel_budget` never eligible until the
+   allocator is wired into reporting), `guards.py` (loud-fail number guard: every numeral
+   incl. number-words must exist in FACTS post-normalization, exact match, multiplier
+   words rejected), `commentary_agent.py` (FACTS from the insights payloads + tier
+   scorecard + MMM summary; structured output with rec types enum-pinned to the eligible
+   set; guard-rejected drafts are never written) → `outputs/commentary_ai.md` (stamped,
+   hash-keyed). Dashboard shows it only when `reporting.ai_commentary: true` (off by
+   default). Golden-set evals in `tests/test_agent_evals.py` (mocked, CI-safe) + a live
+   smoke test that activates when a key is present. A3 parked — see the brief.
 7. **`planner/`** — turns *goals + rails* into a validated **`CampaignPlan`** that feeds the
    naming generator (Plan rows → names + UTMs). Same spine as `lens.py`: deterministic default
    + a **guarded LLM path** (one structured call — model set in rails `llm.model`, Sonnet-class default — when a key is
@@ -160,7 +169,7 @@ python scripts/ingest.py --source synthetic    # extract -> immutable pulls -> h
 python scripts/run_pipeline.py                 # store -> clean -> MMM -> outputs/ (charts, commentary, data_quality.md)
 python scripts/run_pipeline.py --lens "awareness campaign"   # also writes outputs/lens_report.md
 python scripts/plan_campaign.py --goal awareness --budget 100000  # goals+rails -> CampaignPlan -> names/UTMs
-python scripts/advise.py --spec                # A1: report-spec agent -> outputs/report_spec.json (needs key)
+python scripts/advise.py --spec --commentary   # A1+A2 agents -> report_spec.json + commentary_ai.md (needs key)
 streamlit run src/advanced_reporting/dashboard/app.py        # KPI pyramid + goal lens + free-text lens box
 pytest -q
 ```

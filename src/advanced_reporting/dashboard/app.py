@@ -19,6 +19,8 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.agent import load_active_spec  # noqa: E402
+from advanced_reporting.agent.commentary_agent import (  # noqa: E402
+    STAMP, load_active_commentary)
 from advanced_reporting.agent.validate import BLOCK_CATALOG  # noqa: E402
 from advanced_reporting.dashboard import filters, insights, theme  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
@@ -77,9 +79,13 @@ if weekly.empty:
 st.title("How the campaign is doing")
 lo, hi = weekly["date"].min(), weekly["date"].max()
 n_paid = len(insights._paid_channels(weekly))
+_ai_on = bool(rep.get("ai_commentary"))
 st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
-           "below is computed from the weekly tables — no generated commentary. "
-           "Click a channel in any bar/donut to focus the whole dashboard on it.")
+           "below is computed from the weekly tables — "
+           + ("the only generated prose is the clearly-stamped AI commentary "
+              "section at the end (numbers guard-checked against computed facts)."
+              if _ai_on else "no generated commentary. ")
+           + " Click a channel in any bar/donut to focus the whole dashboard on it.")
 if spec_note:
     st.caption(f"⚠ {spec_note}")
 if spec:
@@ -479,6 +485,21 @@ assert set(_BLOCK_RENDERERS) == set(BLOCK_CATALOG), \
     "dashboard block renderers out of sync with agent BLOCK_CATALOG"
 for _name in (spec.get("blocks") or BLOCK_CATALOG):
     _BLOCK_RENDERERS[_name]()
+
+# --- AI commentary (A2): off by default, clearly stamped, number-guarded -----------
+if _ai_on:
+    _ai_body, _ai_note = load_active_commentary(ROOT)
+    with _narrow():
+        st.divider()
+        theme.action_title("AI commentary", STAMP)
+        if _ai_body:
+            st.markdown(_ai_body)
+            st.caption("Every numeral above was checked against the computed facts "
+                       "payload before publication; recommendations come only from "
+                       "the deterministically-eligible menu.")
+        else:
+            st.info(_ai_note or "No AI commentary yet — run "
+                    "`python scripts/advise.py --commentary`.")
 
 # --- external-context aside (DEFERRED: hidden until curated notes exist) -----------
 notes = insights.macro_context(cfg)
