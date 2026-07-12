@@ -49,6 +49,19 @@ _DEFAULT_MAPPINGS = {
 }
 
 
+def scope_to_sources(df, cfg: dict | None):
+    """Filter a store-shaped frame to ``data.sources`` from config (None = keep all).
+
+    Mirrors run_pipeline's source filter so the dashboard's history reads and the
+    agent layer's summaries see the SAME slice of the store the pipeline modeled —
+    a mixed store (synthetic + client drops) must never blend into one report.
+    """
+    sources = ((cfg or {}).get("data") or {}).get("sources")
+    if df is None or not sources or "source" not in getattr(df, "columns", ()):
+        return df
+    return df[df["source"].isin(list(sources))]
+
+
 def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 

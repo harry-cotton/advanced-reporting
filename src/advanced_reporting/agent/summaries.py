@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..reporting import metrics as M
-from ..utils import project_root
+from ..utils import load_config, project_root, scope_to_sources
 
 WEEKLY_CSV = Path("data/processed/channel_weekly_metrics.csv")
 HISTORY_PQ = Path("data/processed/history.parquet")
@@ -107,7 +107,8 @@ def data_summary(root: Path | None = None) -> dict | None:
 
     hist_f = root / HISTORY_PQ
     if hist_f.exists():
-        hist = pd.read_parquet(hist_f)
+        # same slice of the store the pipeline modeled (config data.sources)
+        hist = scope_to_sources(pd.read_parquet(hist_f), load_config())
         summary["goal_mix_by_spend"] = _goal_mix_by_spend(hist)
         try:   # unparsed-name rate: decoded ad-level rows only; absent grain -> skip
             from ..dashboard.drilldown import unparsed_stats

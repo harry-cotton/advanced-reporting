@@ -201,3 +201,44 @@ def test_inbox_to_store_to_weekly_end_to_end(inbox, tmp_path, truth):
     weekly = to_weekly(cleaned)
     assert weekly["spend"].sum() == pytest.approx(hist["spend"].sum(), rel=1e-6)
     assert len(weekly) > 0
+
+
+# --- Adobe recruitment export (added 2026-07-11 for the recruitment-data test) -------
+
+def _adobe_csv(tmp_path):
+    f = tmp_path / "adobe_performance.csv"
+    f.write_text(
+        "date,creative_id,channel,impressions,clicks,ctr_pct,cost_usd,conversions,"
+        "applications_started\n"
+        "2025-05-01,C0001,Display,656,8,1.22,5.11,0,1\n"
+        "2025-05-01,C0002,YouTube,1200,30,2.50,20.00,4,2\n",
+        encoding="utf-8")
+    return f
+
+
+def test_detect_adobe(tmp_path):
+    assert exports.detect_format(_adobe_csv(tmp_path)) == exports.ADOBE
+
+
+def test_adobe_reader_semantics(tmp_path):
+    source, df = exports.read_export(_adobe_csv(tmp_path))
+    assert source == exports.ADOBE
+    schema.validate(df)
+    r = df.set_index("campaign")
+    # applications_started is analytics-measured -> key_events; conversions stays
+    # platform-claimed; the two must never merge
+    assert r.loc["C0002", "key_events"] == 2
+    assert r.loc["C0002", "conversions"] == 4
+    assert r.loc["C0001", "spend"] == pytest.approx(5.11)
+    assert set(df["channel"]) == {"display", "youtube"}      # lowercased
+    assert set(df["currency"]) == {"USD"}                    # declared by cost_usd
+    assert "ctr_pct" not in df.columns                       # derived -> dropped
+
+
+def test_scope_to_sources_filters_history():
+    from advanced_reporting.utils import scope_to_sources
+    hist = pd.DataFrame({"source": ["adobe", "synthetic"], "spend": [1.0, 2.0]})
+    cfg = {"data": {"sources": ["adobe"]}}
+    assert list(scope_to_sources(hist, cfg)["source"]) == ["adobe"]
+    assert len(scope_to_sources(hist, {"data": {"sources": None}})) == 2
+    assert scope_to_sources(None, cfg) is None

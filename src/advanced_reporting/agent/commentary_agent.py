@@ -21,7 +21,7 @@ import pandas as pd
 from ..dashboard import insights
 from ..dashboard.mmm_view import load_mmm, roi_intervals
 from ..llm import call
-from ..utils import load_config, project_root
+from ..utils import load_config, project_root, scope_to_sources
 from . import guards, knowledge, summaries
 from .recommendations import MAX_RECS, eligible_recommendations
 from .spec_agent import DEFAULT_MODEL, load_active_spec
@@ -124,11 +124,14 @@ def build_facts(root: Path | None = None) -> tuple[dict, list[dict]] | None:
     if not weekly_f.exists():
         return None
     weekly = pd.read_csv(weekly_f, parse_dates=["date"])
+    cfg = load_config()
     hist_f = root / summaries.HISTORY_PQ
-    hist = pd.read_parquet(hist_f) if hist_f.exists() else None
+    # weekly csv is already pipeline-scoped; the raw store is not — scope it here
+    hist = (scope_to_sources(pd.read_parquet(hist_f), cfg)
+            if hist_f.exists() else None)
     mmm = load_mmm(root / "outputs")
 
-    rep = (load_config().get("reporting") or {})
+    rep = (cfg.get("reporting") or {})
     spec, _ = load_active_spec(root)
     kpi_label = rep.get("kpi_label") or spec.get("kpi_label") or "key events"
     targets = {**(spec.get("targets") or {}), **(rep.get("targets") or {})}

@@ -121,7 +121,10 @@ def headline_tiles(weekly: pd.DataFrame, kpi_label: str = "key events") -> list[
                 "delta": None, "delta_color": "off",
                 "help": ("Platform-claimed conversions vs analytics-measured "
                          f"{kpi_label}. Platforms self-attribute; a gap is expected.")})
-    if "sessions" in weekly.columns and weekly["sessions"].notna().any():
+    # an all-zero sessions column means "not measured" (gap-filled), not "zero
+    # traffic" — same convention as the tier scorecard: omit, never show 0
+    if ("sessions" in weekly.columns and weekly["sessions"].notna().any()
+            and float(weekly["sessions"].fillna(0).sum()) > 0):
         sess_w = weekly.groupby("date")["sessions"].sum(min_count=1).sort_index()
         tiles.append({
             "label": "Sessions", "value": f"{float(sess_w.sum()):,.0f}",

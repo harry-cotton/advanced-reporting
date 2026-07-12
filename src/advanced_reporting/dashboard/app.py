@@ -53,9 +53,14 @@ def _parse_lens_cached(text: str) -> L.ReportSpec:
     return L.parse_lens(text, use_llm=False)
 
 
+from advanced_reporting.utils import scope_to_sources  # noqa: E402
+
 weekly_all = _load_weekly(str(metrics_f), metrics_f.stat().st_mtime)
 hist_all = _load_hist(str(history_f), history_f.stat().st_mtime) if history_f.exists() else None
 cfg = load_config()
+# the weekly csv is pipeline-scoped already; scope the raw store the same way so a
+# mixed store (synthetic + client drops) can't leak other sources into this report
+hist_all = scope_to_sources(hist_all, cfg)
 rep = cfg.get("reporting", {}) or {}
 # The report spec (outputs/report_spec.json, written by scripts/advise.py --spec)
 # fills the gaps config leaves; explicit config keys always win. No spec -> {}.

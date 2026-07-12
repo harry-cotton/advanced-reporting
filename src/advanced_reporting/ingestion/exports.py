@@ -37,6 +37,7 @@ from ..utils import load_mappings, load_naming_overrides
 
 # source names the store will file pulls under
 GOOGLE, META, LINKEDIN, GA4 = "google_ads", "meta_ads", "linkedin_ads", "ga4"
+ADOBE = "adobe"
 # ad-level format keys (distinct from the source: read_export returns the SOURCE, so
 # e.g. a Meta ad-set export still files under `meta_ads` next to campaign-level pulls)
 GOOGLE_ADGROUPS, META_ADSETS, LINKEDIN_CREATIVES = (
@@ -77,6 +78,8 @@ def detect_format(path) -> str | None:
         return GA4
     if "Amount spent" in first:                       # ad-set check first: both match
         return META_ADSETS if "Ad set name" in first else META
+    if "creative_id" in first and "applications_started" in first:
+        return ADOBE
     return None
 
 
@@ -244,6 +247,34 @@ def read_ga4_export(path, mappings=None) -> pd.DataFrame:
     return schema.to_canonical(out, GA4, mappings)
 
 
+def read_adobe_export(path, mappings=None) -> pd.DataFrame:
+    """Adobe Analytics recruitment export: daily creative x channel media rows.
+
+    Semantics decided 2026-07-11 (Harry): ``applications_started`` is
+    Adobe-Analytics-measured -> ``key_events`` (the analytics yardstick), while
+    ``conversions`` stays platform-claimed; there is no campaign column, so
+    ``creative_id`` becomes the campaign grain. Currency is stamped USD because the
+    export declares it in the column name (``cost_usd``) — not an assumption.
+    ``ctr_pct`` is derived (clicks/impressions) and dropped: the engine recomputes
+    ratios from base quantities, never trusts an export's arithmetic.
+    """
+    path = Path(path)
+    df = pd.read_csv(path)
+    out = pd.DataFrame({
+        "date": pd.to_datetime(df["date"], errors="coerce"),
+        "channel": df["channel"].astype(str).str.strip().str.lower(),
+        "campaign": df["creative_id"].astype(str).str.strip(),
+        "spend": _num(df["cost_usd"]),
+        "impressions": _num(df["impressions"]),
+        "clicks": _num(df["clicks"]),
+        "conversions": _num(df["conversions"]),
+        "key_events": _num(df["applications_started"]),
+        "platform_revenue": float("nan"),
+    })
+    return schema.to_canonical(out, ADOBE, mappings or load_mappings(),
+                               currency="USD")
+
+
 # format key -> (store source name, reader). Ad-level formats share their platform's
 # source so campaign- and ad-level pulls meet in one folder and the store's supersede
 # step can reconcile the two grains.
@@ -255,6 +286,7 @@ _READERS = {
     LINKEDIN: (LINKEDIN, read_linkedin_export),
     LINKEDIN_CREATIVES: (LINKEDIN, read_linkedin_creative_export),
     GA4: (GA4, read_ga4_export),
+    ADOBE: (ADOBE, read_adobe_export),
 }
 
 
