@@ -101,6 +101,14 @@ def call(prompt: str, *, model: str, schema: dict | None = None, system: str | N
         info["input_tokens"] = int(getattr(msg.usage, "input_tokens", 0) or 0)
         info["output_tokens"] = int(getattr(msg.usage, "output_tokens", 0) or 0)
         info["cost_usd"] = cost_usd(model, info["input_tokens"], info["output_tokens"])
+        # A reply cut off at the token ceiling is truncated JSON — say THAT, not
+        # "JSONDecodeError" (live finding 2026-07-11: the decode error hid the cause).
+        if getattr(msg, "stop_reason", None) == "max_tokens":
+            info["error"] = (f"output truncated at max_tokens={max_tokens} — "
+                             "raise the caller's max_tokens")
+            log.warning("LLM call failed (%s) — falling back to the deterministic "
+                        "path", info["error"])
+            return None, info
         data = json.loads(text) if schema is not None else text
         return data, info
     except Exception as e:  # transport/auth/rate-limit/refusal — fall back, but say so

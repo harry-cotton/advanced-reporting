@@ -266,7 +266,7 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
                             "eligible; write none)")
               .replace("{max_recs}", str(MAX_RECS)))
 
-    data, info = call(prompt, model=model, schema=_schema(eligible), max_tokens=3000)
+    data, info = call(prompt, model=model, schema=_schema(eligible), max_tokens=8000)
     if data is None:
         return None, info
 

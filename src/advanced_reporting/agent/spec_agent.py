@@ -102,7 +102,7 @@ def generate_spec(root: Path | None = None, model: str | None = None):
     except FileNotFoundError as e:
         return None, {"error": str(e)}
     registry = M.load_metric_registry()
-    raw, info = call(prompt, model=model, schema=_schema(registry), max_tokens=2000)
+    raw, info = call(prompt, model=model, schema=_schema(registry), max_tokens=8000)
     if raw is None:
         return None, info
 
