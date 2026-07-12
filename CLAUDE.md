@@ -62,6 +62,9 @@ store the pipeline reads from, so history grows over time. A second, forward pat
    saturation), `baseline.py` (works), `meridian_engine.py` (target engine, guarded),
    `factory.py` (`get_engine`).
 4. **`reporting/`** — `charts.py` (matplotlib); `commentary.py` (uncertainty-aware, hedged);
+   `html_report.py` (**single-file client report** — self-contained HTML, base64 matplotlib
+   charts, theme.py tokens; reuses the insights payloads + spec framing + stamped AI
+   commentary when hash-current; NO model calls at build time; `scripts/build_report.py`);
    `metrics.py` (tiered **KPI-pyramid** taxonomy — reach/intent/outcome — from `config/metrics.yaml`,
    campaign-goal tagging from `config/campaign_goals.yaml`, plus funnel + value-format helpers);
    `lens.py` (**free-text report lens**: NL intent → `ReportSpec` → deterministic metrics + a
@@ -170,6 +173,7 @@ python scripts/run_pipeline.py                 # store -> clean -> MMM -> output
 python scripts/run_pipeline.py --lens "awareness campaign"   # also writes outputs/lens_report.md
 python scripts/plan_campaign.py --goal awareness --budget 100000  # goals+rails -> CampaignPlan -> names/UTMs
 python scripts/advise.py --spec --commentary   # A1+A2 agents -> report_spec.json + commentary_ai.md (needs key)
+python scripts/build_report.py                 # single-file HTML client report (deterministic, embeds spec + commentary)
 streamlit run src/advanced_reporting/dashboard/app.py        # KPI pyramid + goal lens + free-text lens box
 pytest -q
 ```

@@ -49,6 +49,11 @@ def _singular(label: str) -> str:
     return label[:-1] if label.endswith("s") else label
 
 
+def _a(noun: str) -> str:
+    """'a'/'an' + noun ('an application start', 'a key event')."""
+    return f"an {noun}" if noun[:1].lower() in "aeiou" else f"a {noun}"
+
+
 def _paid_channels(weekly: pd.DataFrame) -> list[str]:
     per = weekly.groupby("channel")["spend"].sum()
     return sorted(per[per > 0].index)
@@ -362,11 +367,11 @@ def cost_per_outcome_insight(weekly: pd.DataFrame,
     cheap, dear = per.iloc[0], per.iloc[-1]
     if len(per) >= 2 and dear["cost_per"] / cheap["cost_per"] >= 1.15:
         mult = dear["cost_per"] / cheap["cost_per"]
-        title = (f"{channel_label(cheap['channel'])} delivers a {label} for "
+        title = (f"{channel_label(cheap['channel'])} delivers {_a(label)} for "
                  f"{_money(cheap['cost_per'])} — {mult:.1f}x cheaper than "
                  f"{channel_label(dear['channel'])}")
     else:
-        title = (f"Paid channels deliver a {label} for about "
+        title = (f"Paid channels deliver {_a(label)} for about "
                  f"{_money(per['cost_per'].mean())}")
     narrative = (
         "Cost per outcome ranks "
