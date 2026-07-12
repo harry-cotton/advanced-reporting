@@ -17,7 +17,7 @@ from ..llm import call
 from ..reporting import metrics as M
 from ..utils import load_config, project_root
 from . import knowledge, summaries
-from .validate import BLOCK_CATALOG, CAMPAIGN_TYPES, MAX_WATCH_FLAGS, validate_spec
+from .validate import BLOCK_CATALOG, CAMPAIGN_TYPES, validate_spec
 
 SPEC_PATH = Path("outputs/report_spec.json")
 PROMPT_PATH = Path("system/prompts/spec_agent.md")
@@ -26,7 +26,11 @@ DEFAULT_MODEL = "claude-sonnet-5"
 
 def _schema(registry: list[dict]) -> dict:
     """The structured-output contract. Enums pin every closed vocabulary at the API
-    layer; validate.py re-checks locally anyway (clip, never trust)."""
+    layer; validate.py re-checks locally anyway (clip, never trust).
+
+    NOTE (live-API finding 2026-07-11): the structured-outputs schema subset does
+    NOT support size constraints (maxItems/maxLength) — a 400 rejects the whole
+    call. Sizes are enforced locally by validate.py instead (flag/label caps)."""
     metric_keys = [m["key"] for m in registry]
     return {
         "type": "object",
@@ -36,7 +40,7 @@ def _schema(registry: list[dict]) -> dict:
         "properties": {
             "campaign_type": {"enum": list(CAMPAIGN_TYPES)},
             "primary_tier": {"enum": list(M.TIERS)},
-            "kpi_label": {"type": "string", "maxLength": 60},
+            "kpi_label": {"type": "string"},
             "targets": {
                 "type": "array",
                 "items": {
@@ -52,9 +56,8 @@ def _schema(registry: list[dict]) -> dict:
                 },
             },
             "blocks": {"type": "array", "items": {"enum": list(BLOCK_CATALOG)}},
-            "watch_flags": {"type": "array", "maxItems": MAX_WATCH_FLAGS,
-                            "items": {"type": "string", "maxLength": 300}},
-            "rationale": {"type": "string", "maxLength": 600},
+            "watch_flags": {"type": "array", "items": {"type": "string"}},
+            "rationale": {"type": "string"},
         },
     }
 

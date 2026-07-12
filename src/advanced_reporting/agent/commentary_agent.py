@@ -167,33 +167,32 @@ def build_facts(root: Path | None = None) -> tuple[dict, list[dict]] | None:
 
 # ------------------------------------------------------------------ the guarded call
 def _schema(eligible: list[dict]) -> dict:
+    """Structured-output contract. Size constraints (maxItems/maxLength) are NOT in
+    the API's schema subset (400) — counts are enforced by the renderer instead.
+    When nothing is eligible the ``recommendations`` property is omitted entirely
+    (additionalProperties: false makes it unwritable), rather than an empty enum."""
     types = sorted({r["type"] for r in eligible})
+    props: dict = {
+        "lede": {"type": "string"},
+        "sections": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["title", "text"],
+            "properties": {"title": {"type": "string"},
+                           "text": {"type": "string"}}}},
+    }
+    required = ["lede", "sections"]
     if types:
-        rec_items = {
+        props["recommendations"] = {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["type", "evidence_grade", "text"],
             "properties": {
                 "type": {"enum": types},
                 "evidence_grade": {"enum": list(_GRADES)},
-                "text": {"type": "string", "maxLength": 600},
-            }}
-        recs_schema = {"type": "array", "maxItems": min(MAX_RECS, len(types)),
-                       "items": rec_items}
-    else:   # nothing eligible -> the agent cannot write recommendations at all
-        recs_schema = {"type": "array", "maxItems": 0, "items": {"type": "object"}}
-    return {
-        "type": "object", "additionalProperties": False,
-        "required": ["lede", "sections", "recommendations"],
-        "properties": {
-            "lede": {"type": "string", "maxLength": 800},
-            "sections": {"type": "array", "maxItems": 6, "items": {
-                "type": "object", "additionalProperties": False,
-                "required": ["title", "text"],
-                "properties": {"title": {"type": "string", "maxLength": 120},
-                               "text": {"type": "string", "maxLength": 1200}}}},
-            "recommendations": recs_schema,
-        },
-    }
+                "text": {"type": "string"},
+            }}}
+        required.append("recommendations")
+    return {"type": "object", "additionalProperties": False,
+            "required": required, "properties": props}
 
 
 def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
@@ -202,11 +201,24 @@ def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
     dropped and recorded (belt over the schema's braces)."""
     eligible_types = {r["type"] for r in eligible}
     parts = [str(data.get("lede", "")).strip()]
-    for s in data.get("sections") or []:
+    sections = list(data.get("sections") or [])
+    if len(sections) > 6:      # size caps live here now, not in the API schema
+        dropped_sections = len(sections) - 6
+        sections = sections[:6]
+    else:
+        dropped_sections = 0
+    for s in sections:
         parts.append(f"## {s.get('title', '').strip()}\n\n{s.get('text', '').strip()}")
     dropped: list[str] = []
+    if dropped_sections:
+        dropped.append(f"{dropped_sections} section(s) over the 6-section cap")
+    all_recs = list(data.get("recommendations") or [])
+    if len(all_recs) > MAX_RECS:
+        dropped.append(f"{len(all_recs) - MAX_RECS} recommendation(s) over the "
+                       f"max-{MAX_RECS} cap (recommendation_menu.md)")
+        all_recs = all_recs[:MAX_RECS]
     recs = []
-    for r in data.get("recommendations") or []:
+    for r in all_recs:
         if r.get("type") not in eligible_types:
             dropped.append(f"recommendation type {r.get('type')!r} not eligible")
             continue
