@@ -44,3 +44,9 @@ config/naming_overrides.suggested.yaml
 system/context/*
 !system/context/README.md
 !system/context/client_brief.template.md
+
+# demo/client datasets (data policy: data never enters git)
+data/recruitment_demo/
+
+# Office lock files
+~$*
