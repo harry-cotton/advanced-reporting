@@ -62,7 +62,7 @@ def cost_usd(model: str, input_tokens: int, output_tokens: int) -> float | None:
 
 
 def call(prompt: str, *, model: str, schema: dict | None = None, system: str | None = None,
-         max_tokens: int = 1024, timeout: float = 30.0):
+         max_tokens: int = 1024, timeout: float = 180.0):
     """One LLM call. Returns ``(data, info)``.
 
     ``data`` is a parsed dict when ``schema`` is given (schema-enforced by the API),
