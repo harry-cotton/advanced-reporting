@@ -267,10 +267,6 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
                             "eligible; write none)")
               .replace("{max_recs}", str(MAX_RECS)))
 
-    data, info = call(prompt, model=model, schema=_schema(eligible), max_tokens=8000)
-    if data is None:
-        return None, info
-
     # The guard runs on the AGENT-AUTHORED text only (lede, section texts, rec
     # texts) — the deterministic renderer's boilerplate is ours, not the model's.
     # Allowed sources for a numeral: the computed facts, the eligible recs'
@@ -279,14 +275,35 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
     # general guidelines are deliberately NOT allowed: playbook benchmarks must
     # arrive via the spec's validated targets, or a stale education CPC could
     # leak into a recruitment report (live finding 2026-07-11).
-    authored = "\n".join(
-        [str(data.get("lede", ""))]
-        + [f"{s.get('title', '')}\n{s.get('text', '')}"
-           for s in data.get("sections") or []]
-        + [str(r.get("text", "")) for r in data.get("recommendations") or []])
-    violations = guards.check_output(
-        authored, {"facts": facts, "eligible": eligible,
-                   "client_context": context_block})
+    #
+    # One guarded RETRY on rejection, feeding the violations back (live finding:
+    # a draft garbled 2,255 into 2254 — a stochastic digit slip; one corrected
+    # attempt usually clears it). A second failure stays loud and unpublished.
+    allowed = {"facts": facts, "eligible": eligible,
+               "client_context": context_block}
+    data = body = None
+    violations: list[str] = []
+    info: dict = {}
+    for attempt in (1, 2):
+        retry_note = "" if attempt == 1 else (
+            "\n\nYour previous draft was REJECTED by the number guard:\n- "
+            + "\n- ".join(violations)
+            + "\nEvery numeral must appear in FACTS / ELIGIBLE RECOMMENDATIONS / "
+              "CLIENT CONTEXT exactly as given. Redraft, correcting or removing "
+              "the offending numbers.")
+        data, info = call(prompt + retry_note, model=model,
+                          schema=_schema(eligible), max_tokens=8000)
+        if data is None:
+            return None, info
+        authored = "\n".join(
+            [str(data.get("lede", ""))]
+            + [f"{s.get('title', '')}\n{s.get('text', '')}"
+               for s in data.get("sections") or []]
+            + [str(r.get("text", "")) for r in data.get("recommendations") or []])
+        violations = guards.check_output(authored, allowed)
+        if not violations:
+            break
+        info["retried"] = attempt == 1
     body, dropped = _render_body(data, eligible)
     info["dropped"] = dropped
     if violations:
