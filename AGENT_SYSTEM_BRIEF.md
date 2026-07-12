@@ -80,8 +80,10 @@ Second guarded call, also offline, writing `outputs/commentary_ai.md`:
   and the failure printed, never published. (The proposal-agent guard, ported.)
   Normalization must cover (advisor review 2026-07-11): number-WORDS ("three
   channels", "a dozen") → digits before matching; currency/percent/thousands
-  formatting variants. Matching stays EXACT after normalization — no tolerance,
-  ever (a "close enough" guard is no guard). Comparative quantities that carry no
+  formatting variants; trailing fractional zeros (a 15.0 target is legitimately
+  cited as "$15" — live finding). Matching stays VALUE-exact after normalization —
+  no tolerance, ever (a "close enough" guard is no guard); a rounded or computed
+  citation (a "$25" midpoint of a 15–35 band) still rejects. Comparative quantities that carry no
   numeral ("nearly doubled", "roughly half", "twice as expensive") assert
   computations too: the prompt bans them unless the ratio/delta itself is in FACTS —
   so the engine should compute the common deltas/ratios INTO the facts payload,
