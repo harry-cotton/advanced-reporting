@@ -256,9 +256,10 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
                                "before scripts/advise.py --commentary"}
     facts, eligible = built
 
+    context_block = knowledge.as_block(knowledge.load_context(root))
     prompt = (template_f.read_text(encoding="utf-8")
               .replace("{guidelines}", knowledge.as_block(knowledge.load_guidelines(root)))
-              .replace("{context}", knowledge.as_block(knowledge.load_context(root)))
+              .replace("{context}", context_block)
               .replace("{facts}", json.dumps(facts, indent=1, default=str))
               .replace("{eligible_recommendations}",
                        json.dumps(eligible, indent=1, default=str) if eligible
@@ -272,14 +273,20 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
 
     # The guard runs on the AGENT-AUTHORED text only (lede, section texts, rec
     # texts) — the deterministic renderer's boilerplate is ours, not the model's.
-    # Every numeral must exist in facts OR the eligible recs (their evidence
-    # values are computed too, and the agent must cite them).
+    # Allowed sources for a numeral: the computed facts, the eligible recs'
+    # computed evidence, and the CLIENT CONTEXT (Harry-authored, per-engagement —
+    # a band written in the brief is curated truth, not a fabrication). The
+    # general guidelines are deliberately NOT allowed: playbook benchmarks must
+    # arrive via the spec's validated targets, or a stale education CPC could
+    # leak into a recruitment report (live finding 2026-07-11).
     authored = "\n".join(
         [str(data.get("lede", ""))]
         + [f"{s.get('title', '')}\n{s.get('text', '')}"
            for s in data.get("sections") or []]
         + [str(r.get("text", "")) for r in data.get("recommendations") or []])
-    violations = guards.check_output(authored, {"facts": facts, "eligible": eligible})
+    violations = guards.check_output(
+        authored, {"facts": facts, "eligible": eligible,
+                   "client_context": context_block})
     body, dropped = _render_body(data, eligible)
     info["dropped"] = dropped
     if violations:

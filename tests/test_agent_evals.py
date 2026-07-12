@@ -166,9 +166,15 @@ def test_guard_rejects_invented_number():
     assert any("9999" in x for x in v)
 
 
-def test_guard_rejects_reformatted_number():
-    # facts say $74.60; "74.6" is a recomputation, not a restatement
-    assert guards.check_output("cost of $74.6 per event", FACTS)
+def test_guard_value_exact_representation_insensitive():
+    # $74.60 cited as "$74.6" is the same VALUE -> allowed (live finding: spec
+    # targets serialize as floats, '15.0' is legitimately cited as '$15')
+    assert guards.check_output("cost of $74.6 per event", FACTS) == []
+    assert guards.check_output("a target of $16, warn at $35",
+                               {"good": 16.0, "warn": 35.0}) == []
+    # but ROUNDING is a recomputation: 74.60 cited as "75" (or 13.69 as "13.7")
+    assert guards.check_output("costs about $75 per event", FACTS)
+    assert guards.check_output("$13.7 each", {"cost": "$13.69"})
 
 
 def test_guard_rejects_unbacked_number_word():
@@ -296,3 +302,21 @@ def test_live_spec_and_commentary_smoke():
         assert any(g in body for g in
                    ("platform-claimed", "analytics-measured", "modeled"))
         assert json.dumps(cinfo.get("dropped", [])) is not None
+
+
+def test_commentary_guard_allows_client_context_numbers(tmp_path, monkeypatch):
+    """A band written in the Harry-authored client brief is curated truth —
+    citable. (Guidelines numbers stay uncitable: they must arrive via targets.)"""
+    _seed_repo(tmp_path)
+    ctx = tmp_path / "system" / "context"
+    ctx.mkdir(parents=True)
+    (ctx / "client_brief.md").write_text(
+        "judge cost per application against the $15-35 playbook band",
+        encoding="utf-8")
+    reply = _good_reply()
+    reply["lede"] = "Costs sit inside the $15-35 band; meta's ratio is 4.0x."
+    monkeypatch.setattr(CA, "call", lambda *a, **k: (
+        reply, {"model": "m", "input_tokens": 1, "output_tokens": 1,
+                "cost_usd": 0.0, "error": None}))
+    body, info = CA.generate_commentary(tmp_path)
+    assert body is not None, info.get("violations")

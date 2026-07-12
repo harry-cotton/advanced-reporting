@@ -13,7 +13,9 @@ per the 2026-07-11 review:
   they assert computations. The engine computes ratios INTO the facts ("2.1x"),
   so the agent cites those instead;
 - formatting variants normalize: currency symbols, thousands separators, %, x/×
-  suffixes, leading zeros. "$74.60" == "74.60"; "74.6" != "74.60" (format as given).
+  suffixes, leading zeros, trailing fractional zeros. Matching is VALUE-exact,
+  representation-insensitive: "$74.60" == "74.60" == "74.6" (same value), but a
+  rounded "$74.6" for a 74.63 fact — or a computed midpoint — still rejects.
 """
 from __future__ import annotations
 
@@ -30,10 +32,18 @@ _NUMERAL_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
 def _canonical(token: str) -> str:
-    """Comma-free, leading-zero-free (integers only) canonical numeral string."""
+    """Value-canonical numeral string: commas out, leading zeros off integers,
+    trailing fractional zeros off decimals ('15.0' -> '15', '74.60' -> '74.6').
+
+    Live finding 2026-07-11: fact values serialize as floats ('15.0') but are
+    legitimately cited as '$15' or '15.00' — same VALUE, different rendering.
+    Canonicalizing both sides keeps the match value-exact while representation-
+    insensitive; a ROUNDED citation ('13.7' for 13.69) still has a different
+    canonical value and still rejects."""
     t = token.replace(",", "")
-    if "." not in t:
-        t = t.lstrip("0") or "0"
+    if "." in t:
+        t = t.rstrip("0").rstrip(".")
+    t = t.lstrip("0") or "0"
     return t
 
 
