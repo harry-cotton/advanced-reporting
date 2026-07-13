@@ -18,7 +18,7 @@ from advanced_reporting.agent.validate import BLOCK_CATALOG, validate_spec
 def test_guidelines_load_in_briefing_order():
     docs = K.load_guidelines()
     names = list(docs)
-    assert names[:4] == list(K.GUIDELINE_ORDER)
+    assert names[:len(K.GUIDELINE_ORDER)] == list(K.GUIDELINE_ORDER)
     assert all(docs[n].strip() for n in names)
 
 

@@ -15,7 +15,8 @@ from ..utils import project_root
 # Stable feed order: classification rules first, then trust rules, then bands, then
 # the recommendation rails — the order an analyst would brief a new hire.
 GUIDELINE_ORDER = ("campaign_types.md", "conversion_types.md",
-                   "metrics_playbook.md", "recommendation_menu.md")
+                   "metrics_playbook.md", "recommendation_menu.md",
+                   "commentary_style.md")
 
 
 def _read_dir(d: Path, order: tuple[str, ...] = ()) -> dict[str, str]:
