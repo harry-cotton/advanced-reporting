@@ -240,11 +240,13 @@ def main(argv=None) -> int:
 
     gt_json = json.dumps(data.ground_truth, indent=2)
     (out / "ground_truth.json").write_text(gt_json, encoding="utf-8")
-    # Canonical copy for the MMM validation gate (mmm/validation.py reads outputs/). The
-    # dataset folder keeps its own copy so the dataset stays self-contained.
-    outputs = ROOT / "outputs"
-    outputs.mkdir(parents=True, exist_ok=True)
-    (outputs / "ground_truth.json").write_text(gt_json, encoding="utf-8")
+    # Canonical copy for the MMM validation gate (mmm/validation.py reads outputs/). ONLY
+    # for the real full run — a --mini run (e.g. a test) must NEVER clobber the full-scale
+    # answer key the pipeline validates against.
+    if not args.mini:
+        outputs = ROOT / "outputs"
+        outputs.mkdir(parents=True, exist_ok=True)
+        (outputs / "ground_truth.json").write_text(gt_json, encoding="utf-8")
     _write_readme(out, spec, data)
 
     gt = data.ground_truth["identity"]
