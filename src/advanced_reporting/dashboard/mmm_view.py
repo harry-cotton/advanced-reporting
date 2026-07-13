@@ -180,6 +180,57 @@ def plain_summary(summary: pd.DataFrame, meta: dict,
     return lines
 
 
+def methodology_note(summary: pd.DataFrame, meta: dict) -> str:
+    """A plain-language 'how does this model work?' explainer — educates the reader on the
+    method behind the numbers (decomposition, carryover, diminishing returns, why we can
+    partly trust it, and its limits). Engine-aware. Returns markdown."""
+    engine = str(meta.get("engine", "baseline"))
+    kpi = meta.get("kpi_label") or str(meta.get("target", "outcomes")).replace("_", " ")
+    weeks = int((meta.get("fit_metrics") or {}).get("n_obs", 0))
+    n_ch = len(summary)
+    span = f"{weeks} weeks" if weeks else "the flight"
+    geo_line = (
+        "Because each channel spends *different amounts in different regions at different "
+        "times*, the model has dozens of natural experiments to learn from at once. That "
+        "cross-region variation is how it tells apart channels that tend to rise and fall "
+        "together — and it's why this (Google **Meridian**, a Bayesian geo-level model) can "
+        "separate channels the simpler national model can't."
+        if engine == "meridian" else
+        "The model reads the national week-to-week pattern: a regularised regression that "
+        "leans channels toward a shared average unless the data clearly says otherwise, so a "
+        "noisy channel can't claim an outsized effect.")
+
+    return "\n\n".join([
+        f"**What this is.** A Media Mix Model (MMM) looks at how your weekly **{kpi}** rose "
+        f"and fell over {span} and works out how much of that movement each of the {n_ch} paid "
+        "channels explains — versus demand that was always there. It's built on the spend, "
+        "delivery and outcome numbers from the rest of this report; no channel is told in "
+        "advance how well it 'should' do.",
+
+        f"**The core idea — peel the onion.** Picture each week's {kpi} as a stack: a "
+        "**baseline** layer (organic and brand demand that arrives with no ads at all) plus a "
+        "layer from each paid channel. The model estimates the size of every layer by watching "
+        "what happens to outcomes when a channel spends *more* or *less* — the weeks a channel "
+        "goes quiet are as informative as the weeks it goes big.",
+
+        "**Two real-world effects it builds in.** *Carryover* — an ad seen this week can drive "
+        "an application weeks later, so each channel's effect is spread over time, not pinned to "
+        "the day it ran. *Diminishing returns* — the first \\$10k on a channel works harder than "
+        "the tenth \\$10k; the **response curves** below show where each channel starts to "
+        "plateau (spend past the bend buys less).",
+
+        f"**Why it can separate the channels.** {geo_line}",
+
+        "**How much to trust it.** The accuracy figures come from **weeks (and regions) the "
+        "model never saw during fitting** — an honest out-of-sample check, not a flattering "
+        "fit to its own training data. Still, this is **correlation, not a controlled "
+        "experiment**: channels that are always on, or always move together, are genuinely hard "
+        "to tell apart (they show up as *right around the target* or *can't tell yet* above). "
+        "Treat the numbers as a well-reasoned estimate and confirm any big budget move with a "
+        "real holdout or geo test before acting.",
+    ])
+
+
 def _join(channels) -> str:
     labels = [f"**{_label(c)}**" for c in channels]
     if len(labels) <= 1:

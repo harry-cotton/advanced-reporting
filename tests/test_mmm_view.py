@@ -124,6 +124,19 @@ def test_plain_summary_count_target_is_jargon_free():
         assert bad not in text.lower()
 
 
+def test_methodology_note_educates_and_is_engine_aware():
+    mer = mmm_view.methodology_note(_count_summary(), {**_count_meta(), "engine": "meridian"}).lower()
+    # explains the method in plain terms (concepts, not just numbers)
+    for concept in ("baseline", "carryover", "diminishing returns", "response curve"):
+        assert concept in mer
+    assert "correlation, not a controlled experiment" in mer      # honest about limits
+    assert "meridian" in mer and "region" in mer                  # geo-level engine framing
+    # the national baseline engine gets a different explanation (no Meridian/geo claim)
+    base_meta = {**_count_meta(), "engine": "baseline"}
+    base = mmm_view.methodology_note(_count_summary(), base_meta).lower()
+    assert "meridian" not in base and "national" in base
+
+
 def test_fit_cards_lead_with_held_out():
     cards = mmm_view.fit_cards(_meta())
     labels = [c[0] for c in cards]

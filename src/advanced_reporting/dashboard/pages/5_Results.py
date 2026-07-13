@@ -61,6 +61,8 @@ if plain:
         st.markdown("#### In plain terms")
         for para in plain:
             st.markdown(para)
+    with st.expander("How does the model work? (plain-language methodology)"):
+        st.markdown(mmm_view.methodology_note(summary, meta))
 st.divider()
 
 # --- fit strip ------------------------------------------------------------------------
