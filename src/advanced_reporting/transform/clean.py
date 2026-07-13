@@ -184,7 +184,15 @@ def build_modeling_table(weekly_long: pd.DataFrame, kpi: pd.DataFrame,
 
     kpi = kpi.copy()
     kpi["date"] = pd.to_datetime(kpi["date"])
-    keep = ["date", target] + [c for c in control_cols if c in kpi.columns]
+    # A geo-grained KPI (e.g. the FBI CRM matchback: week x geo submitted applications) is
+    # aggregated to national: the target SUMS over geos; controls are geo-invariant, so the
+    # per-date value is taken once (mean collapses identical rows). The geo x weekly KPI is
+    # kept intact upstream for a future geo-level (Meridian) model.
+    present_controls = [c for c in control_cols if c in kpi.columns]
+    if "geo" in kpi.columns and kpi["date"].duplicated().any():
+        agg = {target: "sum", **{c: "mean" for c in present_controls}}
+        kpi = kpi.groupby("date", as_index=False).agg(agg)
+    keep = ["date", target] + present_controls
     model = (wide.merge(kpi[keep], on="date", how="inner")
                  .sort_values("date").reset_index(drop=True))
     return model

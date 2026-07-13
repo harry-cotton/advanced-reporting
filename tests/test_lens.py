@@ -38,10 +38,13 @@ def test_primary_tier_and_metrics_follow_goal():
 
 
 def test_channels_detected_including_alias():
-    s = L.parse_lens("focus on meta and tiktok for awareness", use_llm=False)
+    # Detection is scoped to the engagement's configured channels; pass an explicit config
+    # so this capability test doesn't depend on whichever engagement config.yaml holds.
+    cfg = {"modeling": {"channel_spend_cols": ["meta", "tiktok", "google_search"]}}
+    s = L.parse_lens("focus on meta and tiktok for awareness", use_llm=False, config=cfg)
     assert set(s.channels) == {"meta", "tiktok"}
-    assert L.parse_lens("facebook performance", use_llm=False).channels == ["meta"]
-    assert L.parse_lens("overall conversion report", use_llm=False).channels is None
+    assert L.parse_lens("facebook performance", use_llm=False, config=cfg).channels == ["meta"]
+    assert L.parse_lens("overall conversion report", use_llm=False, config=cfg).channels is None
 
 
 def test_tone_detection():
