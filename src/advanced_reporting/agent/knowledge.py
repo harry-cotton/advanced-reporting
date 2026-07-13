@@ -16,7 +16,7 @@ from ..utils import project_root
 # the recommendation rails — the order an analyst would brief a new hire.
 GUIDELINE_ORDER = ("campaign_types.md", "conversion_types.md",
                    "metrics_playbook.md", "recommendation_menu.md",
-                   "commentary_style.md")
+                   "commentary_style.md", "commentary_examples.md")
 
 
 def _read_dir(d: Path, order: tuple[str, ...] = ()) -> dict[str, str]:
