@@ -35,6 +35,17 @@ modeling:
     - promo_flag
   adstock_max_lag: 8
   train_frac: 0.85
+  # Google Meridian sampler (only used when engine: meridian). Geo-level Bayesian MCMC —
+  # minutes on CPU, manual/local only (CI never fits Meridian). knots < n_weeks keeps the
+  # geo model identifiable; holdout_frac is a random-CELL held-out set for honest R².
+  meridian:
+    n_chains: 4
+    n_adapt: 500
+    n_burnin: 500
+    n_keep: 1000
+    knots: 20
+    holdout_frac: 0.15
+  # Meridian is geo-level: it also needs per-geo population weights (data.geo_populations).
 
 quality:
   spike_factor: 3.0           # flag a week if channel x geo spend > N x the prior week

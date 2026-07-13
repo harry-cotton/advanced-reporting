@@ -198,6 +198,32 @@ def build_modeling_table(weekly_long: pd.DataFrame, kpi: pd.DataFrame,
     return model
 
 
+def build_modeling_table_geo(weekly_geo: pd.DataFrame, kpi: pd.DataFrame,
+                             channel_cols: list[str], target: str = "revenue",
+                             date_col: str = "date",
+                             populations: dict | None = None) -> pd.DataFrame:
+    """Geo x weekly wide table for a GEO-LEVEL model (Meridian): one row per (date, geo)
+    with per-channel spend + the geo-grained KPI + a per-geo ``population``.
+
+    Cross-geo variation is what identifies effects a national model can't; the geo KPI must
+    therefore stay geo-grained (NOT aggregated). Time-only national controls are intentionally
+    left out — Meridian rejects controls that don't vary across geos (its per-time knots
+    absorb them). ``populations`` maps geo code -> population (defaults to 1.0)."""
+    wide = (weekly_geo.pivot_table(index=[date_col, "geo"], columns="channel",
+                                   values="spend", aggfunc="sum").fillna(0.0))
+    for c in channel_cols:
+        if c not in wide.columns:
+            wide[c] = 0.0
+    wide = wide[channel_cols].reset_index()
+    wide[date_col] = pd.to_datetime(wide[date_col])
+    kpi = kpi.copy()
+    kpi[date_col] = pd.to_datetime(kpi[date_col])
+    model = wide.merge(kpi[[date_col, "geo", target]], on=[date_col, "geo"], how="inner")
+    pops = populations or {}
+    model["population"] = model["geo"].map(pops).fillna(1.0).astype(float)
+    return model.sort_values([date_col, "geo"]).reset_index(drop=True)
+
+
 # --- Data-quality report -------------------------------------------------------------
 
 def _coverage_gaps(weekly_unfilled: pd.DataFrame, freq: str = "W-MON") -> list[dict]:

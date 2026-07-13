@@ -136,9 +136,11 @@ def recovery_markdown(report: dict, *, count: bool = False) -> str:
              f"(threshold {report['min_rank_corr']:.1f}).\n")
     if count:
         L.append("_Count target (submitted applications): contribution is in outcomes, ROI "
-                 "is incremental applications per $1,000. A FAIL here with recovered rank "
-                 "order is the honest baseline-engine story — always-on media absorbs some "
-                 "baseline level; Bayesian priors (Meridian) are expected to tighten this._\n")
+                 "is incremental applications per $1,000. The strict 2x / rank-0.7 gate is "
+                 "hard on the collinear pair + small channels by design; the national "
+                 "baseline engine tends to FAIL it (always-on media absorbs baseline level), "
+                 "while Meridian's geo-level Bayesian priors recover those channels — the "
+                 "reason it is the target engine._\n")
         con = lambda v: f"{v:,.0f}"
         roi = lambda v: f"{v*1000:.2f}"
         headers = "| channel | est contribution | true contribution | est/true | est apps/$1k | true apps/$1k | CI covers truth |"

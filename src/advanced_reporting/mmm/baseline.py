@@ -150,7 +150,10 @@ class BaselineMMM(BaseMMM):
         c = lsq_linear(A, b, bounds=(lb, ub), max_iter=300).x
         return c[:p], c[p:]
 
-    def fit(self, model_df, channel_cols, control_cols, target="revenue", date_col="date"):
+    def fit(self, model_df, channel_cols, control_cols, target="revenue", date_col="date",
+            **_kwargs):
+        # _kwargs absorbs engine-specific extras (e.g. Meridian's geo_df) — the national
+        # baseline engine models the wide model_df and ignores them.
         df = model_df.reset_index(drop=True)
         n = len(df)
         n_tr = int(n * self.train_frac)

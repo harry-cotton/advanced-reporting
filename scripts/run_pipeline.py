@@ -11,15 +11,18 @@ from advanced_reporting.utils import load_config
 from advanced_reporting.ingestion.csv_source import CSVSource
 from advanced_reporting.transform.clean import (
     load_history, clean_ad_data, to_weekly, to_weekly_geo, channel_metrics,
-    build_modeling_table, data_quality_report, data_quality_markdown)
+    build_modeling_table, build_modeling_table_geo, data_quality_report,
+    data_quality_markdown)
 from advanced_reporting.mmm.factory import get_engine
 from advanced_reporting.reporting.charts import plot_all
 from advanced_reporting.reporting.commentary import generate_commentary
 
 
-def run(lens=None, sources=None, no_mmm=False):
+def run(lens=None, sources=None, no_mmm=False, engine=None):
     cfg = load_config()
     m, rep = cfg["modeling"], cfg["reporting"]
+    if engine:                       # CLI override, e.g. --engine meridian (a ~5-min MCMC)
+        m = {**m, "engine": engine}
     q = cfg.get("quality", {})
     outdir = ROOT / rep["output_dir"]
     proc = ROOT / "data" / "processed"
@@ -80,11 +83,24 @@ def run(lens=None, sources=None, no_mmm=False):
                                         m["control_cols"], m["target"])
         model_df.to_csv(proc / "modeling_table.csv", index=False)
 
-        # 3. MODEL (engine selected in config)
-        engine = get_engine(m["engine"], train_frac=m.get("train_frac", 0.85),
-                            adstock_max_lag=m.get("adstock_max_lag", 8))
-        result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
-                            m["target"], m["date_col"])
+        # 3. MODEL (engine selected in config). Meridian is geo-level: it needs the
+        #    geo x weekly table (cross-geo variation is its identifying signal); the
+        #    baseline engine models the national wide table.
+        if m["engine"] == "meridian":
+            engine = get_engine("meridian", **(m.get("meridian") or {}))
+            geo_df = build_modeling_table_geo(
+                weekly_geo, kpi, m["channel_spend_cols"], m["target"], m["date_col"],
+                populations=cfg.get("data", {}).get("geo_populations"))
+            geo_df.to_csv(proc / "modeling_table_geo_kpi.csv", index=False)
+            print(f"  meridian: geo x weekly fit — {geo_df['geo'].nunique()} geos x "
+                  f"{geo_df['date'].nunique()} weeks (this runs MCMC; minutes, not seconds)")
+            result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
+                                m["target"], m["date_col"], geo_df=geo_df)
+        else:
+            engine = get_engine(m["engine"], train_frac=m.get("train_frac", 0.85),
+                                adstock_max_lag=m.get("adstock_max_lag", 8))
+            result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
+                                m["target"], m["date_col"])
         result.channel_summary.to_csv(outdir / "channel_summary.csv", index=False)
         result.contributions.to_csv(outdir / "contributions.csv", index=False)
         (outdir / "fit_metrics.json").write_text(json.dumps(result.fit_metrics, indent=2),
@@ -162,7 +178,9 @@ if __name__ == "__main__":
     _ap.add_argument("--no-mmm", action="store_true",
                      help="descriptive mode: dashboard tables + non-causal commentary, "
                           "no MMM (automatic when business_kpi_weekly.csv is absent)")
+    _ap.add_argument("--engine", default=None, choices=["baseline", "meridian"],
+                     help="override modeling.engine for this run (meridian runs MCMC, minutes)")
     _a = _ap.parse_args()
     run(lens=_a.lens,
         sources=[s.strip() for s in _a.sources.split(",")] if _a.sources else None,
-        no_mmm=_a.no_mmm)
+        no_mmm=_a.no_mmm, engine=_a.engine)
