@@ -379,3 +379,27 @@ def test_load_pipeline_stages_reads_and_standardizes(tmp_path):
     assert load_pipeline_stages({"data": {}}, tmp_path) is None
     assert load_pipeline_stages(
         {"data": {"pipeline_stages_path": "nope.csv"}}, tmp_path) is None
+
+
+def test_applicant_quality_by_last_touch_channel():
+    rows = []
+    for d in pd.date_range("2026-01-05", periods=2, freq="W-MON"):
+        for ch, scr, adv in (("google_search", 400.0, 320.0),
+                             ("jobboards", 300.0, 180.0),
+                             ("display", 30.0, 2.0)):        # below the volume floor
+            rows.append({"date": d, "stage": "initial_screening", "channel": ch,
+                         "count": scr})
+            rows.append({"date": d, "stage": "meet_greet", "channel": ch,
+                         "count": adv})
+    b = insights.applicant_quality_insight(pd.DataFrame(rows), min_screened=500)
+    per = b["per_channel"].set_index("channel")
+    assert "display" not in per.index                        # 60 screened < 500 floor
+    assert per.loc["google_search", "survival"] == pytest.approx(0.80)
+    assert per.loc["jobboards", "survival"] == pytest.approx(0.60)
+    # honesty labels are non-negotiable
+    assert "last-touch" in b["narrative"] and "not causal" in b["narrative"]
+    # degrades to None without the stage frame or with one channel only
+    assert insights.applicant_quality_insight(None) is None
+    one = pd.DataFrame(rows)
+    assert insights.applicant_quality_insight(
+        one[one["channel"] == "google_search"]) is None

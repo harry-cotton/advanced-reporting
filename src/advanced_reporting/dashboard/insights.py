@@ -738,6 +738,53 @@ def recruiting_pipeline_insight(stages: pd.DataFrame | None) -> dict | None:
             "overall_rate": overall, "censor_note": PIPELINE_CENSOR_NOTE}
 
 
+def applicant_quality_insight(stages: pd.DataFrame | None,
+                              min_screened: int = 500) -> dict | None:
+    """Applicant QUALITY by last-touch channel: what share of each channel's screened
+    applicants clear the FIRST gate (initial screening → meet & greet).
+
+    First gate only, deliberately: it has the shortest lag from submission, so it is
+    the least right-censored stage — later gates under-count recent cohorts unevenly
+    and would misread as channel differences. Channels below ``min_screened`` screened
+    applicants are excluded (a 5% rate on 155 people is noise, not signal).
+
+    HONESTY: the channel column is the CRM's LAST-TOUCH attribution — descriptive,
+    never causal, and never a media-performance verdict. Quality of who applies is a
+    selection observation, not something to grade media on.
+    """
+    if stages is None or len(stages) == 0 or "channel" not in stages.columns:
+        return None
+    s = stages[stages["stage"].isin(["initial_screening", "meet_greet"])]
+    if s.empty:
+        return None
+    pv = (s.groupby(["channel", "stage"])["count"].sum().unstack("stage"))
+    if not {"initial_screening", "meet_greet"}.issubset(pv.columns):
+        return None
+    pv = pv[pv["initial_screening"] >= float(min_screened)].copy()
+    if len(pv) < 2:
+        return None
+    pv["survival"] = pv["meet_greet"] / pv["initial_screening"]
+    pv = (pv.reset_index().rename(columns={"initial_screening": "screened",
+                                           "meet_greet": "advanced"})
+            .sort_values("survival", ascending=False).reset_index(drop=True))
+    best, worst = pv.iloc[0], pv.iloc[-1]
+    title = (f"{channel_label(best['channel'])} applicants clear initial screening at "
+             f"{best['survival'] * 100:.0f}% — {channel_label(worst['channel'])} at "
+             f"{worst['survival'] * 100:.0f}%")
+    narrative = (
+        "Share of each channel's screened applicants who clear the first gate "
+        "(initial screening → meet & greet): "
+        + ", ".join(f"**{channel_label(r['channel'])}** {r['survival'] * 100:.0f}% "
+                    f"({r['screened']:,.0f} screened)" for _, r in pv.iterrows())
+        + ". _Channel is the CRM's **last-touch** attribution — descriptive applicant "
+        "quality, not causal media credit; channels with fewer than "
+        f"{min_screened:,} screened applicants are excluded. Only the first gate is "
+        "compared: later gates lag submission by months, so recent cohorts would "
+        "under-count unevenly._")
+    return {"title": title, "narrative": narrative, "per_channel": pv,
+            "min_screened": min_screened}
+
+
 # ---------------------------------------------------------------- macro slot (hidden)
 def macro_context(cfg: dict | None) -> list[str] | None:
     """The DEFERRED "External context" aside: curated per-client notes only.
