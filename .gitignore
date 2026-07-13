@@ -47,6 +47,8 @@ system/context/*
 
 # demo/client datasets (data policy: data never enters git)
 data/recruitment_demo/
+data/MMM Data/
+data/archive/
 
 # Office lock files
 ~$*

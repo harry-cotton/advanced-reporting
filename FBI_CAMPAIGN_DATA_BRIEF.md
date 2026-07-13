@@ -6,6 +6,10 @@
 files · MMM target = submitted applications (count) · task ends at **P5** (UI finish).
 The planner full-circle demo (fitted MMM → CampaignPlan → trafficking sheet) is **out of
 scope** — a follow-up task.
+**Amended 2026-07-13 (Harry):** (1) all emitted data lands in **`data/MMM Data/`** as a
+self-contained dataset folder; (2) applications happen on the **FBI's own careers portal**
+(fbijobs-style), NOT USAJOBS; (3) the dataset carries the **post-submission applicant
+pipeline** at major-phase grain only (6 phases, no sub-tasks) — see "Applicant pipeline".
 
 ## Goal
 
@@ -34,10 +38,11 @@ weeks; the partial-week handling is already proven elsewhere).
   ctv, audio, jobboards. **Deliberately NO TikTok** (federal device ban — realism).
 - **Non-paid rows (4):** organic_search, direct, email (owned nurture, $0 spend),
   social_organic.
-- **Funnel:** impressions → clicks → GA4 sessions → engaged sessions → **application
-  starts** (`key_events`, GA4-measured at campaign grain) → **submitted applications**
-  (weekly CRM matchback = the MMM target). This dataset ships the `unlock_mmm`
-  recommendation *fulfilled*.
+- **Funnel:** impressions → clicks → GA4 sessions on the **FBI careers portal**
+  (fbijobs-style — the Bureau's own site, NOT USAJOBS; GA4 property on the portal) →
+  engaged sessions → **application starts** (`key_events`, GA4-measured at campaign
+  grain) → **submitted applications** (weekly CRM matchback = the MMM target). This
+  dataset ships the `unlock_mmm` recommendation *fulfilled*.
 - **Geos (10 field-office regions, `US-*` codes):** NE, MA (heavy — HQ gravity), SE, GL,
   MW, SC, MTN, PNW, PSW, NCA. Each carries a population (rough census weights) — Meridian
   needs it.
@@ -61,6 +66,58 @@ weeks; the partial-week handling is already proven elsewhere).
 ≈ **42%**; ≈ 88k starts/yr, ≈ 37k submitted applications/yr; paid drives **~55–65% of
 submitted apps** (the rest is baseline/organic demand). Blended claim ratio ≈ 2.8–3.2x.
 SA converts hardest (costliest), PROF cheapest.
+
+## Applicant pipeline (post-submission — NEW, amended 2026-07-13)
+
+The applicant journey continues through the Bureau's gate process after submission. We
+track the **6 major phases only** (per the portal's tracker; sub-tasks like "schedule
+PFT" are deliberately NOT modeled — majors keep the DGP and UI tractable):
+
+`initial_screening → meet_greet → testing → conditional_offer →
+background_investigation → final_offer`
+
+**Hard rule — MMM boundary:** the MMM target remains **submitted applications**. The
+pipeline stages are selection-driven and lag media by months; they are a REPORTING
+layer, never a modeling target. The UI must say this in the product's honesty voice
+("media buys applications; it cannot pass a polygraph").
+
+**Cohort DGP:** the generator models application-week cohorts flowing through the gates
+with path-specific pass rates and lags, then emits **calendar-week counts** (what an ATS
+export looks like). Recent cohorts are **right-censored** — realistic, and the UI
+annotates it ("pipeline still maturing; final offers completing now stem from
+applications ~9–12 months ago").
+
+Special Agent calibration (other paths gentler — fewer washouts, ~half the lags,
+cumulative 15–25%):
+
+| Phase (entering) | Pass rate from prior | Lag from submission |
+|---|---|---|
+| initial_screening (incl. Phase I test) | 40% | 2–4 wks |
+| meet_greet | 75% | 4–8 wks |
+| testing (PFT + Phase II) | 45% | 8–16 wks |
+| conditional_offer | 80% | 16–24 wks |
+| background_investigation (poly + BI) | 75% | 24–40 wks |
+| final_offer (accept → BFTC) | 90% | 40–60 wks |
+
+Cumulative SA ≈ **7%** — with ~40% of ~37k submissions/yr being SA, that's **≈1,100 SA
+entering BFTC per year**, matching Quantico's real-world throughput. That's the anchor;
+keep it.
+
+**Emission:** `crm_pipeline_stages.csv` in the dataset folder — weekly counts by
+`week × geo × initiative × stage` (+ a `channel` column via last-touch CRM attribution,
+emitted but only surfaced in the stretch item below). ~40k rows; trivial.
+
+**UI (right-sized — do not gold-plate):**
+- `metrics.yaml`: outcome-tier VOLUME metrics `conditional_offers`, `final_offers`
+  (counts only — no in-window cost-per-stage efficiency metrics; lagged denominators
+  would mislead).
+- ONE new deterministic insight block, `recruiting_pipeline`: 6-stage funnel with
+  stage-to-stage pass-through, the censoring annotation, and a woven narrative.
+  Registering it means extending `agent/validate.py BLOCK_CATALOG` + the renderer dicts
+  in `app.py` and `html_report.py` (the existing assert keeps them in sync).
+- **P5 stretch (only if P1–P5 land cleanly):** applicant *quality* by channel —
+  screening-survival rate by last-touch channel ("cost per qualified applicant"),
+  explicitly labeled last-touch CRM attribution, never causal.
 
 ## Baked-in MMM stress tests (this is what makes it a *test*)
 
@@ -98,7 +155,10 @@ CRM KPI file alongside applications.
    ROI + baseline share). **Accounting identity enforced by test: baseline + Σ channel
    contributions = KPI, exactly.**
 2. **Emission = realistic platform export files** written by
-   `scripts/generate_fbi_campaign.py` into `data/inbox/FBI Recruitment/`:
+   `scripts/generate_fbi_campaign.py` into **`data/MMM Data/`** (amended location — a
+   self-contained, gitignored dataset folder: all platform exports + GA4 + CRM files +
+   `ground_truth.json` copy + a README describing the scenario; ingest reads it via
+   `ingest.py --inbox "data/MMM Data" --reset`):
    - Google ad-group export covers **search AND youtube** (video campaigns are Google
      Ads); Meta ad-set export; LinkedIn creative export; GA4 export — all via the
      existing `exports.py` readers.
@@ -109,9 +169,12 @@ CRM KPI file alongside applications.
    - One grain per channel (the store supersedes campaign rows covered by ad-level —
      never ingest both for the same channel).
    - CRM: `business_kpi_weekly.csv` gains a **geo column** (+ controls); national table
-     derived by aggregation (small `build_modeling_table` extension).
-3. **Fresh engagement:** ingest with `ingest.py --inbox "data/inbox/FBI Recruitment"
-   --reset` (archives the old mixed store). `config data.sources: null` — ONE engagement,
+     derived by aggregation (small `build_modeling_table` extension). It is emitted into
+     `data/MMM Data/` — P2 makes the pipeline's KPI path configurable (or copies it to
+     `data/raw/`; executor picks the smallest clean change). Plus
+     `crm_pipeline_stages.csv` (see "Applicant pipeline").
+3. **Fresh engagement:** ingest with `ingest.py --inbox "data/MMM Data" --reset`
+   (archives the old mixed store). `config data.sources: null` — ONE engagement,
    every page ties out. This permanently kills the Audiences-page cross-dataset
    incoherence found in the 2026-07 UI review.
 4. **Naming loop — dogfood the grammar.**
@@ -169,11 +232,14 @@ CRM KPI file alongside applications.
   *Accept:* scenario validates against a schema check; old 4-segment names still decode;
   `import meridian` (or documented fallback) works.
 - **P1 — DGP engine + export emitters + ground truth.** `scenario_dgp.py`,
-  `generate_fbi_campaign.py`, ground_truth.json. Tests: seeded determinism; accounting
-  identity exact; emitted exports pass `schema.validate` through their readers; naming
-  round-trip incl. initiative; unparsed rate ≈ configured; `--mini` generates in <5s.
+  `generate_fbi_campaign.py`, ground_truth.json — all emitted into `data/MMM Data/`.
+  Includes the applicant-pipeline cohort model + `crm_pipeline_stages.csv`. Tests:
+  seeded determinism; accounting identity exact; emitted exports pass `schema.validate`
+  through their readers; naming round-trip incl. initiative; unparsed rate ≈ configured;
+  pipeline cohorts monotone non-increasing with pass rates ≈ configured and censoring
+  present in the final year; `--mini` generates in <5s.
   *Accept:* realism sanity table printed (per-channel CPM/CTR/cost-per-start inside the
-  calibration bands above).
+  calibration bands above; SA cumulative pipeline ≈ 7% → ≈1,100 BFTC/yr).
 - **P2 — ingest + store + descriptive pipeline.** mappings.yaml entries; `--inbox
   --reset` ingest; geo-KPI merge into `build_modeling_table`; pipeline e2e descriptive.
   *Accept:* all six dashboard pages tie out on the single engagement (spend/starts equal
@@ -188,9 +254,11 @@ CRM KPI file alongside applications.
   *Accept:* side-by-side truth/baseline/Meridian report committed (table + charts);
   stress cases (a),(b),(f),(g) behave as designed; `modeling.engine: meridian` renders
   the Incrementality page end-to-end.
-- **P5 — UI finish + review.** Config block above; colors/labels; spec + commentary +
-  client report regenerated; screenshot pass of all pages; **re-run UI_REVIEW_PROMPT.md**
-  and fix quick wins it surfaces.
+- **P5 — UI finish + review.** Config block above; colors/labels; the
+  `recruiting_pipeline` insight block (+ BLOCK_CATALOG/renderers sync) and the
+  outcome-tier pipeline volume metrics; spec + commentary + client report regenerated;
+  screenshot pass of all pages; **re-run UI_REVIEW_PROMPT.md** and fix quick wins it
+  surfaces. Channel-quality (last-touch) stretch only if everything else landed.
   *Accept:* "finished UI" — every page populated, totals reconcile, Incrementality
   rendered from a real Meridian (or baseline, if Meridian env ultimately blocked —
   say so loudly) result.
@@ -212,7 +280,9 @@ CRM KPI file alongside applications.
 
 Planner full-circle (P6 — future task); real platform connectors; TikTok; a schema-level
 career-path column (initiative lives in the campaign name only); demographic breakdowns;
-macro-trend commentary content.
+macro-trend commentary content; pipeline **sub-task** gates (majors only); cohort-grain
+pipeline UI (calendar-week counts only); any MMM on post-submission stages; USAJOBS
+(applications live on the Bureau's own portal).
 
 ## Suggested kickoff for the implementing session
 
