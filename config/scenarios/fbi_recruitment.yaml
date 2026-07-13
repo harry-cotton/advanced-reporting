@@ -1,0 +1,281 @@
+# =============================================================================
+# Scenario spec — "FBI Talent Acquisition" synthetic engagement
+# =============================================================================
+# The scenario bible for the FBI recruiting DGP (FBI_CAMPAIGN_DATA_BRIEF.md). Every
+# number the generator emits obeys this file. It is committed, structural config — NO
+# secrets, NO data. Consumed by ingestion/scenario_dgp.py (P1) and validated by
+# ingestion/scenario.py:validate_scenario (schema check).
+#
+# The fiction is clearly FICTIONAL: a continuous FY24-FY26 FBI recruiting program,
+# ~$15M/yr paid media, applications on the Bureau's own careers portal (fbijobs-style,
+# NOT USAJOBS). The MMM target is SUBMITTED APPLICATIONS (a count). Post-submission
+# pipeline stages are a REPORTING layer, never a modeling target.
+
+name: fbi_recruitment
+version: 1
+seed: 20240101                       # deterministic DGP seed
+
+meta:
+  client: "Federal Bureau of Investigation — Talent Acquisition"   # fictional cover name
+  campaign: "Omnichannel Recruiting FY24–26"
+  currency: USD
+  kpi_label: "application starts"                # mid-funnel GA4 key_events label
+  mmm_target: submitted_applications             # the weekly CRM matchback column
+  target_kind: count                             # not currency — see brief decision 5
+  analytics_vendor: GA4
+  portal: "FBI careers portal (fbijobs-style)"
+
+# Flight: Mon 2024-01-01 -> Sun 2026-07-05 = exactly 131 complete weeks, no partial edges.
+flight:
+  start: 2024-01-01                  # Monday
+  end: 2026-07-05                    # Sunday
+  weeks: 131
+
+budget:
+  annual_usd: 15000000
+  total_usd: 37500000                # ~131 weeks of paid media
+  # Occupancy: share of channel x geo x week cells that carry spend when flighted.
+  flighting_occupancy: 0.65
+
+# --- Career paths (the campaign `initiative` trailing segment) ----------------
+# Spend shares sum to 1.0. SA is the hero (~45%). PROF converts cheapest, SA hardest.
+initiatives:
+  - {code: SA,    name: "Special Agent",                     spend_share: 0.45}
+  - {code: INTEL, name: "Intelligence Analyst",              spend_share: 0.18}
+  - {code: CYBER, name: "Cyber / STEM",                      spend_share: 0.17}
+  - {code: LING,  name: "Linguists",                         spend_share: 0.08}
+  - {code: PROF,  name: "Professional Staff / Forensic Acct", spend_share: 0.12}
+
+# --- Geos: 10 field-office regions (US-* codes) -------------------------------
+# population = rough census weight (sums ~1.0); base_multiplier scales demand
+# (NE/MA carry HQ gravity). Meridian needs population.
+geos:
+  - {code: US-NE,  name: "Northeast",        population: 0.11, base_multiplier: 1.15}
+  - {code: US-MA,  name: "Mid-Atlantic",     population: 0.13, base_multiplier: 1.30}  # HQ gravity
+  - {code: US-SE,  name: "Southeast",        population: 0.13, base_multiplier: 1.00}
+  - {code: US-GL,  name: "Great Lakes",      population: 0.11, base_multiplier: 0.95}
+  - {code: US-MW,  name: "Midwest",          population: 0.08, base_multiplier: 0.85}
+  - {code: US-SC,  name: "South Central",    population: 0.12, base_multiplier: 0.95}
+  - {code: US-MTN, name: "Mountain",         population: 0.06, base_multiplier: 0.90}
+  - {code: US-PNW, name: "Pacific Northwest", population: 0.07, base_multiplier: 1.00}
+  - {code: US-PSW, name: "Pacific Southwest", population: 0.12, base_multiplier: 1.05}
+  - {code: US-NCA, name: "Northern California", population: 0.07, base_multiplier: 1.10}
+
+# --- Channels ----------------------------------------------------------------
+# spend_share for PAID channels sums to 1.0 (8 paid). Non-paid channels carry $0 spend.
+#   grain:  ad_group | ad_set | creative | campaign  (emission grain)
+#   reader: the ingestion/exports.py reader (ad-level) or 'generic_csv' (campaign grain)
+#   cpm / cpc: pricing band midpoint; ctr: click-through rate
+#   claim_ratio: platform-claimed conversions / GA4-verifiable (the honesty spread)
+#   adstock_decay: geometric decay per week
+#   hill: {half_sat_spend, shape} Hill saturation on weekly spend (per channel x geo)
+#   roi_apps_per_1k: TRUE incremental SUBMITTED applications per $1,000 (ground truth;
+#                    P1 calibrates so paid drives ~55-65% of submitted apps)
+channels:
+  google_search:
+    kind: paid
+    spend_share: 0.22
+    grain: ad_group
+    reader: read_google_adgroup_export
+    campaign_type: search
+    cpc: 4.50
+    ctr: 0.035
+    claim_ratio: 2.2
+    adstock_decay: 0.20              # fast
+    hill: {half_sat_spend: 9000, shape: 1.6}   # deep in the plateau (stress d)
+    roi_apps_per_1k: 2.2
+    roi_posture: "high avg ROI, poor marginal (saturation)"
+  youtube:
+    kind: paid
+    spend_share: 0.15
+    grain: ad_group                 # Google Ads video campaigns -> google ad-group export
+    reader: read_google_adgroup_export
+    campaign_type: video
+    cpm: 14.0
+    ctr: 0.004
+    claim_ratio: 3.5
+    adstock_decay: 0.65             # slow
+    hill: {half_sat_spend: 12000, shape: 1.2}
+    roi_apps_per_1k: 1.4
+    roi_posture: "mid"
+  meta:
+    kind: paid
+    spend_share: 0.18
+    grain: ad_set
+    reader: read_meta_export
+    cpm: 9.0
+    ctr: 0.011
+    claim_ratio: 3.2
+    adstock_decay: 0.50
+    hill: {half_sat_spend: 11000, shape: 1.3}
+    roi_apps_per_1k: 2.0
+    roi_posture: "good"
+  linkedin:
+    kind: paid
+    spend_share: 0.12
+    grain: creative
+    reader: read_linkedin_creative_export
+    cpm: 32.0
+    ctr: 0.0055
+    claim_ratio: 2.6
+    adstock_decay: 0.40
+    hill: {half_sat_spend: 8000, shape: 1.4}
+    roi_apps_per_1k: 1.8
+    roi_posture: "strong for INTEL/CYBER/PROF"
+    initiative_affinity: {INTEL: 1.5, CYBER: 1.5, PROF: 1.4, SA: 0.7, LING: 0.9}
+  ctv:
+    kind: paid
+    spend_share: 0.12
+    grain: campaign
+    reader: generic_csv
+    cpm: 38.0
+    ctr: 0.0                         # zero-click (stress g)
+    claim_ratio: 40.0               # extreme: claims thousands, GA4 verifies ~none
+    adstock_decay: 0.75             # slowest
+    hill: {half_sat_spend: 15000, shape: 1.1}
+    roi_apps_per_1k: 1.2
+    roi_posture: "mid (halo)"
+  display:
+    kind: paid
+    spend_share: 0.10
+    grain: campaign
+    reader: generic_csv
+    cpm: 3.50
+    ctr: 0.0012
+    claim_ratio: 4.5
+    adstock_decay: 0.35
+    hill: {half_sat_spend: 10000, shape: 1.5}
+    roi_apps_per_1k: 0.7
+    roi_posture: "weak — the cut candidate"
+  jobboards:
+    kind: paid
+    spend_share: 0.07
+    grain: campaign
+    reader: generic_csv
+    cpc: 1.80
+    ctr: 0.08
+    claim_ratio: 1.4
+    adstock_decay: 0.20             # fast
+    hill: {half_sat_spend: 4000, shape: 1.8}    # near-saturated for PROF
+    roi_apps_per_1k: 2.1
+    roi_posture: "solid; near-saturated for PROF"
+  audio:
+    kind: paid
+    spend_share: 0.04
+    grain: campaign
+    reader: generic_csv
+    cpm: 22.0
+    ctr: 0.0
+    claim_ratio: null               # promo-code trickle only
+    adstock_decay: 0.60
+    hill: {half_sat_spend: 6000, shape: 1.2}
+    roi_apps_per_1k: 0.9
+    roi_posture: "tiny spend -> unproven (interval spans break-even)"
+  # Non-paid rows ($0 spend); still emit GA4 sessions / key_events.
+  organic_search: {kind: nonpaid}
+  direct:         {kind: nonpaid}
+  email:          {kind: nonpaid}   # owned nurture
+  social_organic: {kind: nonpaid}
+
+# --- Funnel calibration -------------------------------------------------------
+# impressions -> clicks -> GA4 sessions -> engaged -> application starts (key_events)
+#   -> submitted applications (weekly CRM matchback = the MMM target).
+funnel:
+  cost_per_start_usd: [150, 200]     # blended target band
+  start_to_submitted: 0.42
+  starts_per_year: 88000
+  submitted_per_year: 37000
+  paid_share_of_submitted: [0.55, 0.65]   # rest is baseline/organic demand
+  blended_claim_ratio: [2.8, 3.2]
+  # session/engagement rates off clicks (mid-funnel tier)
+  click_to_session: 0.92
+  session_to_engaged: 0.55
+  engaged_to_start: 0.11
+  # per-initiative conversion difficulty (multiplies cost-per-start; SA hardest)
+  initiative_difficulty: {SA: 1.35, INTEL: 1.00, CYBER: 1.05, LING: 1.10, PROF: 0.75}
+
+# --- Seasonality + controls ---------------------------------------------------
+seasonality:
+  grad_season: {months: [5, 6], lift: 1.25}      # May-Jun
+  new_year:    {months: [1],    lift: 1.20}      # Jan career-switch spike
+controls:
+  # emitted in the CRM KPI file alongside applications; used as MMM control_cols
+  unemployment_index:
+    kind: slow_moving
+    correlation: 0.35              # positive with applications
+    base: 4.0
+    amplitude: 1.2
+  news_spike_flag:
+    kind: binary_shocks
+    n_shocks: 4                    # a few 1-2wk shocks over the flight
+    duration_weeks: [1, 2]
+    lift: 1.15
+
+# --- Baked-in MMM stress tests (what makes it a *test*) -----------------------
+stress:
+  collinear_pair:                  # (a) meta + youtube share one pulse calendar
+    channels: [meta, youtube]
+  dark_channel:                    # (b) linkedin paused 6 weeks (budget freeze)
+    channel: linkedin
+    dark_weeks: {start: 2025-10-06, weeks: 6}
+  burst:                           # (c) National Recruiting Week, ~2.5x for 2 weeks
+    channels: [google_search, meta, youtube]
+    multiplier: 2.5
+    periods:
+      - {start: 2025-05-05, weeks: 2}
+      - {start: 2026-05-04, weeks: 2}
+  saturation: {channel: google_search}          # (d) deep in Hill plateau
+  unproven:   {channel: audio}                   # (e) too small to identify
+  geo_lever:                                     # (f) ctv staggered geo launch
+    channel: ctv
+    launch_first: {geos: [US-MA, US-NE, US-SE, US-PSW], date: 2024-07-01}
+    launch_all: 2025-03-01
+  zero_click: {channel: ctv}                      # (g) claims verified by ~none in GA4
+
+# --- Applicant pipeline (post-submission REPORTING layer, never an MMM target) --
+# 6 major phases only; cohorts flow through gates with path-specific pass rates + lags,
+# emitted as calendar-week counts (ATS-export shape). Recent cohorts right-censored.
+pipeline:
+  stages: [initial_screening, meet_greet, testing, conditional_offer,
+           background_investigation, final_offer]
+  paths:
+    # Special Agent — the anchor: cumulative ~7% -> ~1,100 BFTC/yr. Keep it.
+    SA:
+      pass_rate:  {initial_screening: 0.40, meet_greet: 0.75, testing: 0.45,
+                   conditional_offer: 0.80, background_investigation: 0.75,
+                   final_offer: 0.90}
+      lag_weeks:  {initial_screening: [2, 4], meet_greet: [4, 8], testing: [8, 16],
+                   conditional_offer: [16, 24], background_investigation: [24, 40],
+                   final_offer: [40, 60]}
+    # Other paths: gentler (fewer washouts, ~half the lags, cumulative 15-25%).
+    default:
+      pass_rate:  {initial_screening: 0.60, meet_greet: 0.85, testing: 0.65,
+                   conditional_offer: 0.85, background_investigation: 0.85,
+                   final_offer: 0.92}
+      lag_weeks:  {initial_screening: [1, 2], meet_greet: [2, 4], testing: [4, 8],
+                   conditional_offer: [8, 12], background_investigation: [12, 20],
+                   final_offer: [20, 30]}
+  last_touch_attribution: true      # emit a `channel` column (CRM last-touch); surfaced only in stretch
+
+# --- Unparsed-name tail (the naming-convention adoption pitch) -----------------
+# ~12% of ad-level spend across ~6 legacy names, concentrated in meta + search.
+unparsed_tail:
+  spend_share: 0.12
+  channels: [meta, google_search]
+  names:
+    - "SA_recruit_2024_final_v2"
+    - "Advantage+ broad (test)"
+    - "Special Agent - Q1 push"
+    - "cyber_evergreen"
+    - "brand exact [old]"
+    - "INTEL retarget copy"
+
+# --- Naming vocab (dogfood the grammar; mirrors planner_rails.yaml extensions) --
+naming_vocab:
+  markets: [US]
+  objectives: [AWARENESS, CONSIDER, CONVERT]
+  audiences:
+    PROSPECT: [LAL-1PCT, INT-LAW, VET-MIL, STEM-GRAD, LANG-ARA, CAMPUS]
+    RETARGET: [SITE-90D, ENGAGE-30D, ABANDON-APP]
+  creatives: [HERO_VID_16x9, DAYINLIFE_VID_9x16, MISSION_STAT_1x1, TESTIM-AGENT_VID_16x9]
+  initiatives: [SA, INTEL, CYBER, LING, PROF]

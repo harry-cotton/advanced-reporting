@@ -25,7 +25,7 @@ class PlannerValidationError(ValueError):
 # The naming generator's Plan-sheet columns, verbatim and in order. Kept in sync with
 # ``naming/naming_generator.py:PLAN_COLS`` by ``tests/test_planner.py`` (round-trip).
 PLAN_COLS = ["market", "channel", "objective", "audience_type", "audience_detail",
-             "creative", "format", "size", "placement", "version"]
+             "creative", "format", "size", "placement", "version", "initiative"]
 
 
 @dataclass
@@ -136,6 +136,9 @@ class CampaignPlan:
                 "size": cr.size,
                 "placement": au.placement,
                 "version": cr.version,
+                # The planner does not select a career-path initiative; it stays blank so
+                # names keep the classic 4-segment campaign form. See naming grammar.
+                "initiative": "",
             })
         return rows
 

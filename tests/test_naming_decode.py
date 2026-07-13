@@ -64,6 +64,90 @@ def test_non_conforming_names_land_in_unparsed(name):
     assert d.audience_detail == d.creative == d.creative_format == ""
 
 
+# -- campaign grammar: the optional trailing `initiative` segment (backward compatible) --
+
+@pytest.mark.parametrize("name,fields", [
+    # every pre-initiative 4-segment campaign name must still decode unchanged
+    ("US_META_CONVERT_PROSPECT",
+     {"market": "US", "channel": "META", "objective": "CONVERT",
+      "audience_type": "PROSPECT", "initiative": ""}),
+    ("US_GOOGLE_AWARENESS_PROSPECT",
+     {"market": "US", "channel": "GOOGLE", "objective": "AWARENESS",
+      "audience_type": "PROSPECT", "initiative": ""}),
+])
+def test_campaign_decode_backward_compat(name, fields):
+    d = nd.decode_campaign_name(name)
+    assert d.kind == "campaign"
+    for k, v in fields.items():
+        assert getattr(d, k) == v
+
+
+@pytest.mark.parametrize("name,initiative", [
+    ("US_META_CONVERT_PROSPECT_SA", "SA"),
+    ("US_LINKEDIN_CONSIDER_RETARGET_INTEL", "INTEL"),
+    ("US_YOUTUBE_AWARENESS_PROSPECT_CYBER", "CYBER"),
+])
+def test_campaign_decode_with_initiative(name, initiative):
+    d = nd.decode_campaign_name(name)
+    assert d.kind == "campaign"
+    assert d.initiative == initiative
+    assert nd.decode_initiative(name) == initiative
+    # segments 0-3 are read exactly as the 4-segment form
+    assert (d.market, d.channel, d.objective, d.audience_type) == tuple(name.split("_")[:4])
+
+
+@pytest.mark.parametrize("name", [
+    "US_META_CONVERT",                 # too few segments
+    "a_b_c_d_e_f",                     # too many segments
+    "Advantage+ broad (test)",         # illegal characters
+    "US_META_CONVERT_PROSPECT__SA",    # empty token
+])
+def test_campaign_decode_unparsed(name):
+    d = nd.decode_campaign_name(name)
+    assert d.kind == "unparsed"
+    assert d.initiative == "" and d.market == ""
+
+
+def test_campaign_decode_blank_and_helper():
+    for blank in ("", "  ", None, float("nan")):
+        d = nd.decode_campaign_name(blank)
+        assert d.kind == "blank" and d.initiative == ""
+    assert nd.decode_initiative("US_META_CONVERT_PROSPECT") == ""
+
+
+def test_campaign_round_trip_through_generator(tmp_path):
+    """The real generator composes the trailing initiative; decode recovers it, and blank
+    initiatives still produce classic 4-segment names."""
+    from openpyxl import load_workbook
+
+    template = tmp_path / "plan.xlsx"
+    output = tmp_path / "out.xlsx"
+    gen.build_template(template)
+
+    # Inject an initiative on the first two example rows; leave the rest blank.
+    wb = load_workbook(template)
+    ws = wb["Plan"]
+    init_col = gen.PLAN_COLS.index("initiative") + 1
+    ws.cell(row=2, column=init_col, value="SA")
+    ws.cell(row=3, column=init_col, value="INTEL")
+    wb.save(template)
+
+    _cols, records, warnings = gen.generate(template, output)
+    assert records and not warnings
+    seen_with, seen_without = False, False
+    for rec in records:
+        d = nd.decode_campaign_name(rec["Campaign Name"])
+        assert d.kind == "campaign"
+        assert d.initiative == rec["initiative"]          # round-trips, blank or set
+        assert d.market == rec["market"]
+        assert d.channel == rec["channel"]                # name carries the raw plan channel
+        assert d.objective == rec["objective"]
+        assert d.audience_type == rec["audience_type"]
+        seen_with = seen_with or d.initiative != ""
+        seen_without = seen_without or d.initiative == ""
+    assert seen_with and seen_without
+
+
 def test_blank_is_campaign_level_not_unparsed():
     for blank in ("", "  ", None, float("nan")):
         d = nd.decode_name(blank)

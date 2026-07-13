@@ -47,6 +47,24 @@ class DecodedName:
     creative_format: str = ""
 
 
+# Campaign grammar (generator DEFAULT_SCHEME "Campaign"):
+#   market _ channel _ objective _ audience_type [_ initiative]
+# The first four segments are the classic form; ``initiative`` is an OPTIONAL trailing
+# segment (a career path / product line, e.g. SA). Reading segments 0-3 is unchanged, so
+# every pre-initiative 4-segment name still decodes — the 5th segment is purely additive.
+_CAMPAIGN_FIELDS = ("market", "channel", "objective", "audience_type", "initiative")
+
+
+@dataclass(frozen=True)
+class DecodedCampaign:
+    kind: str                    # "campaign" | "unparsed" | "blank"
+    market: str = ""
+    channel: str = ""
+    objective: str = ""
+    audience_type: str = ""
+    initiative: str = ""         # "" when the name is the classic 4-segment form
+
+
 def decode_name(name) -> DecodedName:
     """Parse one ad-set/ad name against the naming grammar. Deterministic, never guesses."""
     text = "" if name is None or (isinstance(name, float) and pd.isna(name)) else str(name).strip()
@@ -66,6 +84,31 @@ def decode_name(name) -> DecodedName:
                                audience_detail=tokens[1],
                                placement=tokens[2] if len(tokens) == 3 else "")
     return DecodedName("unparsed", audience_type=UNPARSED)
+
+
+def decode_campaign_name(name) -> DecodedCampaign:
+    """Parse one CAMPAIGN name against the campaign grammar. Deterministic, never guesses.
+
+    4 tokens -> the classic form (``initiative`` empty); 5 tokens -> the 5th is the
+    trailing career-path ``initiative``. A blank name is a naming failure at campaign
+    grain only if it should have had a name — here it decodes to ``blank`` (all empty),
+    mirroring ``decode_name``. Anything else (wrong token count, illegal characters)
+    lands in ``unparsed``, never guessed.
+    """
+    text = "" if name is None or (isinstance(name, float) and pd.isna(name)) else str(name).strip()
+    if not text:
+        return DecodedCampaign("blank")
+    tokens = text.split("_")
+    if len(tokens) in (4, 5) and all(_TOKEN_RE.match(t) for t in tokens):
+        return DecodedCampaign("campaign", market=tokens[0], channel=tokens[1],
+                               objective=tokens[2], audience_type=tokens[3],
+                               initiative=tokens[4] if len(tokens) == 5 else "")
+    return DecodedCampaign("unparsed")
+
+
+def decode_initiative(name) -> str:
+    """The trailing career-path ``initiative`` for a campaign name ("" if absent/unparsed)."""
+    return decode_campaign_name(name).initiative
 
 
 def norm_key(name) -> str:
