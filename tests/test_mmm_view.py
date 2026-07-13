@@ -59,6 +59,54 @@ def test_roi_intervals_verdicts():
     assert list(roi.index) == ["meta", "tiktok", "linkedin"]  # sorted by point ROI
 
 
+def _count_summary() -> pd.DataFrame:
+    # cost per incremental app = spend/contribution; interval flips the contribution CI.
+    return pd.DataFrame([
+        # strong: worst-case cost (600k/2000=300) still below good (400)
+        {"channel": "google_search", "spend": 600_000.0, "contribution": 2000.0,
+         "contribution_low": 2000.0, "contribution_high": 3000.0, "roi": 0.0033,
+         "roi_low": 0.0033, "roi_high": 0.005},
+        # unproven: interval straddles the band (best 250, worst 1000)
+        {"channel": "meta", "spend": 500_000.0, "contribution": 800.0,
+         "contribution_low": 500.0, "contribution_high": 2000.0, "roi": 0.0016,
+         "roi_low": 0.001, "roi_high": 0.004},
+        # cut candidate: even best-case cost (400k/500=800) above warn (650)
+        {"channel": "display", "spend": 400_000.0, "contribution": 400.0,
+         "contribution_low": 300.0, "contribution_high": 500.0, "roi": 0.001,
+         "roi_low": 0.00075, "roi_high": 0.00125},
+        # unproven / no measurable effect: contribution can't be ruled out as ~zero
+        {"channel": "audio", "spend": 200_000.0, "contribution": 0.0,
+         "contribution_low": 0.0, "contribution_high": 300.0, "roi": 0.0,
+         "roi_low": 0.0, "roi_high": 0.0015},
+    ])
+
+
+def _count_meta() -> dict:
+    return {"engine": "baseline", "target": "submitted_applications", "target_kind": "count",
+            "cost_per_outcome_target": {"good": 400, "warn": 650}, "kpi_label": "application starts",
+            "fit_metrics": {"r2": 0.98, "test_r2": 0.95, "test_mape": 0.06}}
+
+
+def test_is_count_target():
+    assert mmm_view.is_count_target(_count_meta()) is True
+    assert mmm_view.is_count_target(_meta()) is False        # currency default
+
+
+def test_cost_per_outcome_verdicts_and_band():
+    cpo = mmm_view.cost_per_outcome_intervals(_count_summary(), _count_meta()).set_index("channel")
+    assert cpo.loc["google_search", "verdict"] == "strong"       # whole interval below good
+    assert cpo.loc["meta", "verdict"] == "unproven"             # straddles the band
+    assert cpo.loc["display", "verdict"] == "cut_candidate"     # whole interval above warn
+    assert cpo.loc["audio", "verdict"] == "unproven"           # can't rule out zero effect
+    # cheapest first; the band is carried for the page
+    assert cpo.index[0] == "google_search"
+    assert cpo.loc["google_search", "good"] == 400 and cpo.loc["google_search", "warn"] == 650
+    # cost = spend / contribution point estimate
+    assert cpo.loc["google_search", "cost_per"] == 300.0
+    # a zero-contribution channel gets an infinite cost point (no measurable effect)
+    assert cpo.loc["audio", "cost_per"] == float("inf")
+
+
 def test_fit_cards_lead_with_held_out():
     cards = mmm_view.fit_cards(_meta())
     labels = [c[0] for c in cards]

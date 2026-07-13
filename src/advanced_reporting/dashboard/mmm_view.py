@@ -11,7 +11,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+
+# Default client band for a COUNT target ($ per incremental outcome) when the run meta
+# carries none — mirrors config modeling.cost_per_outcome_target.
+_DEFAULT_COST_BAND = {"good": 400.0, "warn": 650.0}
 
 
 def load_mmm(outdir: Path) -> dict | None:
@@ -58,6 +63,52 @@ def roi_intervals(summary: pd.DataFrame) -> pd.DataFrame:
     out.loc[out["roi_low"] >= 1.0, "verdict"] = "profitable"
     out.loc[out["roi_high"] < 1.0, "verdict"] = "unprofitable"
     return out
+
+
+def is_count_target(meta: dict) -> bool:
+    """True when the MMM target is a COUNT (e.g. submitted applications), not currency.
+
+    For a count target the ROI number is incremental-outcomes-per-$ (≈0.005) and grading
+    it against 1.0 is meaningless — the page grades cost PER incremental outcome instead.
+    """
+    return str(meta.get("target_kind", "currency")).lower() == "count"
+
+
+def cost_per_outcome_intervals(summary: pd.DataFrame, meta: dict) -> pd.DataFrame:
+    """Per-channel COST per incremental outcome ($ / incremental application) + 90% interval
+    + a client-band verdict, cheapest first.
+
+    Cost = spend / incremental contribution, so the interval FLIPS the contribution CI
+    (best case = spend/contribution_high). Graded against ``cost_per_outcome_target``:
+    interval entirely below ``good`` = strong; entirely above ``warn`` = cut candidate;
+    spanning (or an interval that reaches 'infinite' because the model can't rule out zero
+    incremental effect) = unproven. Provenance label: "client target".
+    """
+    band = meta.get("cost_per_outcome_target") or _DEFAULT_COST_BAND
+    good, warn = float(band.get("good")), float(band.get("warn"))
+    out = summary[["channel", "spend", "contribution",
+                   "contribution_low", "contribution_high"]].copy()
+
+    def _cost(spend, contrib):
+        # sub-1-application contribution over the whole flight = no measurable effect
+        return float(spend) / contrib if contrib and contrib > 1.0 else np.inf
+
+    out["cost_per"] = [_cost(s, c) for s, c in zip(out["spend"], out["contribution"])]
+    out["cost_low"] = [_cost(s, c) for s, c in zip(out["spend"], out["contribution_high"])]
+    out["cost_high"] = [_cost(s, c) for s, c in zip(out["spend"], out["contribution_low"])]
+
+    def _verdict(r):
+        if not np.isfinite(r["cost_high"]):
+            return "unproven"                     # can't rule out zero incremental effect
+        if r["cost_high"] <= good:
+            return "strong"                       # even the worst case beats the good band
+        if r["cost_low"] > warn:
+            return "cut_candidate"                # confidently measurable AND above warn
+        return "unproven"                         # spans the band
+
+    out["verdict"] = [_verdict(r) for _, r in out.iterrows()]
+    out["good"], out["warn"] = good, warn
+    return out.sort_values("cost_per").reset_index(drop=True)
 
 
 def response_curves(meta: dict) -> dict[str, dict]:

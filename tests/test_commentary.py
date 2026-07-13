@@ -17,6 +17,22 @@ def _result(rows, r2=0.85, test_r2=0.75, params=None):
                          n_obs=104, n_train=88, ridge_alpha=1.0))
 
 
+def test_count_target_commentary_grades_cost_per_incremental():
+    # google_search: cost/app ~$200 (strong); audio: ~0 contribution (unproven, no ROI-vs-1)
+    res = _result([
+        ("google_search", 8_250_000, 40_000, 35_000, 45_000, 0.0048, 0.0042, 0.0057),
+        ("audio", 1_500_000, 0.0, 0.0, 800.0, 0.0, 0.0, 0.0005),
+    ])
+    md = generate_commentary(res, target="submitted_applications", target_kind="count",
+                             cost_band={"good": 400, "warn": 650}, kpi_label="application starts")
+    assert "cost per incremental application starts" in md.lower()
+    assert "application starts" in md and "polygraph" in md      # count framing + honesty voice
+    assert "ROI-vs-1.0 is meaningless" in md                     # explicitly NOT graded on 1.0
+    assert "**strong**" in md                                   # google_search beats the band
+    assert "unproven" in md                                     # ~zero contribution isn't confident
+    assert "40,000" in md                                       # outcomes rendered as counts
+
+
 def test_confidently_unprofitable_channel_is_flagged():
     # ROI interval entirely below 1.0 used to fall through every branch and print
     # "No strong flags" while the channel lost money

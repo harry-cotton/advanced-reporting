@@ -42,7 +42,10 @@ def run(lens=None, sources=None, no_mmm=False):
 
     # No business-KPI series -> no MMM: descriptive mode (dashboard + non-causal
     # commentary). The KPI (e.g. CRM matchback) is what unlocks incrementality.
-    kpi_path = ROOT / "data/raw/business_kpi_weekly.csv"
+    # KPI path is configurable (data.kpi_path) so a self-contained dataset folder can hold
+    # its own CRM matchback; defaults to data/raw/business_kpi_weekly.csv.
+    kpi_rel = cfg.get("data", {}).get("kpi_path") or "data/raw/business_kpi_weekly.csv"
+    kpi_path = Path(kpi_rel) if Path(kpi_rel).is_absolute() else ROOT / kpi_rel
     if not no_mmm and not kpi_path.exists():
         print(f"  {kpi_path.name} not found -> descriptive mode (no MMM)")
         no_mmm = True
@@ -90,6 +93,11 @@ def run(lens=None, sources=None, no_mmm=False):
         # curves + actual-vs-predicted. Engine-agnostic — Meridian writes the same shape.
         (outdir / "mmm_result.json").write_text(json.dumps({
             "engine": result.engine, "target": m["target"],
+            # count vs currency target + the client band drive the Incrementality page's
+            # verdict logic (cost-per-incremental-outcome for counts, ROI-vs-1.0 for currency)
+            "target_kind": m.get("target_kind", "currency"),
+            "cost_per_outcome_target": m.get("cost_per_outcome_target"),
+            "kpi_label": rep.get("kpi_label"),
             "fit_metrics": result.fit_metrics, "params": result.params,
             "response_curves": {ch: {"spend": list(c["spend"]),
                                      "response": list(c["response"]),
@@ -102,7 +110,10 @@ def run(lens=None, sources=None, no_mmm=False):
         # 4. REPORT
         charts = plot_all(result, outdir)
         (outdir / "commentary.md").write_text(
-            generate_commentary(result, creport, m["target"]), encoding="utf-8")
+            generate_commentary(result, creport, m["target"],
+                                target_kind=m.get("target_kind", "currency"),
+                                cost_band=m.get("cost_per_outcome_target"),
+                                kpi_label=rep.get("kpi_label")), encoding="utf-8")
 
         # 5. VALIDATE vs known ground truth (synthetic runs only; no-op on real data)
         from advanced_reporting.mmm.validation import validate_run
