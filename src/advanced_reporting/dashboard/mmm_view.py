@@ -111,6 +111,82 @@ def cost_per_outcome_intervals(summary: pd.DataFrame, meta: dict) -> pd.DataFram
     return out.sort_values("cost_per").reset_index(drop=True)
 
 
+def _label(ch: str) -> str:
+    from . import theme
+    return theme.channel_label(str(ch))
+
+
+def plain_summary(summary: pd.DataFrame, meta: dict,
+                  contributions: pd.DataFrame | None = None) -> list[str]:
+    """Jargon-free, plain-language read of the model result — the story a non-analyst can
+    act on. Returns a list of short markdown paragraphs (no R², no intervals, no 'ROI')."""
+    kpi = meta.get("kpi_label") or str(meta.get("target", "outcomes")).replace("_", " ")
+    kpi_one = kpi[:-1] if kpi.endswith("s") else kpi        # "application starts" -> "start"
+    paid = float(summary["contribution"].sum())
+    baseline = (float(contributions["baseline"].sum())
+                if contributions is not None and "baseline" in contributions.columns else None)
+    lines: list[str] = []
+
+    if baseline is not None and baseline + paid > 0:
+        total = baseline + paid
+        pct = paid / total
+        lines.append(
+            f"Over this period there were about **{total:,.0f} {kpi}**. The model estimates "
+            f"paid media drove roughly **{paid:,.0f} of them (~{pct:.0%})** — the other "
+            f"~{1-pct:.0%} is *baseline*: {kpi} the Bureau would likely have received anyway "
+            "(brand awareness, organic demand, word of mouth). More ad spend can't move that "
+            "baseline part.")
+
+    if is_count_target(meta):
+        cpo = cost_per_outcome_intervals(summary, meta)
+        # Streamlit markdown reads a bare "$" as LaTeX math — escape it so dollar amounts
+        # render as money, not garbled formulae.
+        d = "\\$"
+        good = float(cpo["good"].iloc[0])
+        finite = cpo[np.isfinite(cpo["cost_per"])]
+        if len(finite):
+            best = finite.iloc[0]
+            lines.append(
+                f"The most efficient paid channel is **{_label(best['channel'])}** — about "
+                f"**{d}{best['cost_per']:,.0f} to generate one extra {kpi_one}**. Channels below "
+                f"the client's {d}{good:,.0f} target are the safest places to put more budget.")
+        warn = float(cpo["warn"].iloc[0])
+        strong = list(cpo.loc[cpo["verdict"] == "strong", "channel"])
+        cut = list(cpo.loc[cpo["verdict"] == "cut_candidate", "channel"])
+        # Split "unproven" into two very different plain-language stories:
+        #  - near the target: a real, measured cost that just straddles the good/watch band
+        #  - can't measure: the interval can't even rule out zero effect (too small/overlapping)
+        unp = cpo[cpo["verdict"] == "unproven"]
+        near = list(unp.loc[np.isfinite(unp["cost_high"]), "channel"])
+        cant = list(unp.loc[~np.isfinite(unp["cost_high"]), "channel"])
+        if strong:
+            lines.append("**Working well (confident):** " + _join(strong)
+                         + f" — comfortably under the {d}{good:,.0f} cost target. Safe to lean into.")
+        if near:
+            lines.append("**Right around the target:** " + _join(near)
+                         + f" — a real, measured cost that lands near the {d}{good:,.0f}–{d}{warn:,.0f} "
+                         "range, so it's not confidently a bargain or a waste. Hold steady; these "
+                         "are your workhorse channels, just not clear-cut winners at this target.")
+        if cut:
+            lines.append("**Too expensive (trim candidates):** " + _join(cut)
+                         + f" — even the best case costs more than the {d}{warn:,.0f} watch line.")
+        if cant:
+            lines.append("**Can't tell yet (don't cut or scale on this alone):** " + _join(cant)
+                         + " — too small, or too overlapping with other channels, for the model "
+                         "to measure. Prove them with a real test before making a call.")
+
+    lines.append("_These are **model estimates, not proven cause-and-effect**. Validate any "
+                 "big budget move with a holdout or geo test before acting._")
+    return lines
+
+
+def _join(channels) -> str:
+    labels = [f"**{_label(c)}**" for c in channels]
+    if len(labels) <= 1:
+        return labels[0] if labels else ""
+    return ", ".join(labels[:-1]) + " and " + labels[-1]
+
+
 def response_curves(meta: dict) -> dict[str, dict]:
     """Per-channel response curve {spend[], response[], mean_spend} from the run meta."""
     return dict(meta.get("response_curves") or {})

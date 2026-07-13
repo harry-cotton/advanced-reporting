@@ -54,6 +54,15 @@ st.caption(f"Modeling weekly **{outcome_word}** · every figure is a modeled, un
            "bound **estimate** — validate the big moves with holdout tests before "
            "reallocating budget.")
 
+# --- in plain terms (jargon-free read leads; the charts below carry the detail) --------
+plain = mmm_view.plain_summary(summary, meta, run["contributions"])
+if plain:
+    with st.container(border=True):
+        st.markdown("#### In plain terms")
+        for para in plain:
+            st.markdown(para)
+st.divider()
+
 # --- fit strip ------------------------------------------------------------------------
 cards = mmm_view.fit_cards(meta)
 for col, (label, value, help_) in zip(st.columns(len(cards)), cards):

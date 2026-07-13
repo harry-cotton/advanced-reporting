@@ -107,6 +107,23 @@ def test_cost_per_outcome_verdicts_and_band():
     assert cpo.loc["audio", "cost_per"] == float("inf")
 
 
+def test_plain_summary_count_target_is_jargon_free():
+    contrib = pd.DataFrame({"baseline": [3000.0], "google_search": [2000.0],
+                            "meta": [800.0], "display": [400.0], "audio": [0.0]})
+    lines = mmm_view.plain_summary(_count_summary(), _count_meta(), contrib)
+    text = " ".join(lines)
+    # plain-language framing: paid vs baseline, the honesty note, the kpi label
+    assert "application starts" in text and "baseline" in text and "%" in text
+    assert "model estimates, not proven" in text.lower()
+    # the buckets land in the right plain-language sentence
+    assert "Working well" in text and "Google Search" in text        # strong (cost 300<400)
+    assert "Too expensive" in text and "Display" in text             # cut candidate
+    assert "Can't tell yet" in text and "Audio" in text              # unbounded interval
+    # NO analyst jargon
+    for bad in ("r²", "roi", "interval", "held-out", "adstock", "posterior"):
+        assert bad not in text.lower()
+
+
 def test_fit_cards_lead_with_held_out():
     cards = mmm_view.fit_cards(_meta())
     labels = [c[0] for c in cards]
