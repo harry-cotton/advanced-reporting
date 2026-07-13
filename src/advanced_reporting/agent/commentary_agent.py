@@ -29,6 +29,12 @@ from .spec_agent import DEFAULT_MODEL, load_active_spec
 COMMENTARY_PATH = Path("outputs/commentary_ai.md")
 PROMPT_PATH = Path("system/prompts/commentary_agent.md")
 STAMP = "AI-drafted from computed facts — review before client use"
+# Bump when the deterministic numbers the commentary cites can change (e.g. the
+# 2026-07-13 partial-week delta fix moved "-12%" → "-3%"). A commentary stamped with an
+# older logic version is treated as STALE and hidden with a re-run note — cached LLM
+# prose must never contradict the computed blocks it sits beside. (Independent of
+# ``data_hash``, which keys the spec: the data is unchanged, only the reporting logic.)
+LOGIC_VERSION = "2026-07-13-partial-weeks"
 
 _GRADES = ("platform-claimed", "analytics-measured", "modeled")
 
@@ -88,14 +94,15 @@ def _insight_facts(weekly: pd.DataFrame, hist: pd.DataFrame | None,
 
 
 def _scorecard_facts(weekly: pd.DataFrame, tier: str, targets: dict,
-                     kpi_label: str) -> dict:
-    sc = insights.tier_scorecard(weekly, tier, targets=targets, kpi_label=kpi_label)
+                     kpi_label: str, config_target_keys: set | None = None) -> dict:
+    sc = insights.tier_scorecard(weekly, tier, targets=targets, kpi_label=kpi_label,
+                                 config_target_keys=config_target_keys)
     return {
         "tier": sc["label"],
+        # provenance is explicit so prose can't call an industry benchmark a "client
+        # target": "client target" / "industry benchmark" / "channel spread".
         "gauges": [{"metric": r["label"], "value": r["value_str"],
-                    "verdict": r["verdict"],
-                    "bands": ("configured targets" if r["mode"] == "absolute"
-                              else "channel spread (no absolute target set)")}
+                    "verdict": r["verdict"], "bands": r["provenance"]}
                    for r in sc["rag"]],
         "pacing": [{"metric": p["label"], "value": p["value_str"], "note": p["note"]}
                    for p in sc["pace"]],
@@ -152,7 +159,9 @@ def build_facts(root: Path | None = None) -> tuple[dict, list[dict]] | None:
                        str(weekly["date"].max().date())],
         "n_paid_channels": len(insights._paid_channels(weekly)),
         "insights": _insight_facts(weekly, hist, kpi_label, rep.get("budget")),
-        "primary_tier_scorecard": _scorecard_facts(weekly, tier, targets, kpi_label),
+        "primary_tier_scorecard": _scorecard_facts(
+            weekly, tier, targets, kpi_label,
+            config_target_keys=set(rep.get("targets") or {})),
     }
     if (m := _mmm_facts(mmm)) is not None:
         facts["mmm"] = m
@@ -315,7 +324,8 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
         "---", f"stamp: {STAMP}",
         f"generated_at: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         f"model: {info.get('model')}",
-        f"data_hash: {summaries.data_hash(root)}", "---", "",
+        f"data_hash: {summaries.data_hash(root)}",
+        f"logic_version: {LOGIC_VERSION}", "---", "",
     ])
     out_f = root / COMMENTARY_PATH
     out_f.parent.mkdir(parents=True, exist_ok=True)
@@ -336,11 +346,17 @@ def load_active_commentary(root: Path | None = None) -> tuple[str | None, str | 
         return None, (f"{COMMENTARY_PATH} has no front-matter stamp — ignored; "
                       "re-run scripts/advise.py --commentary")
     front, body = parts[1], parts[2].strip()
-    stamped = None
+    stamped, logic = None, None
     for line in front.splitlines():
         if line.startswith("data_hash:"):
             stamped = line.split(":", 1)[1].strip()
+        elif line.startswith("logic_version:"):
+            logic = line.split(":", 1)[1].strip()
     if stamped != str(summaries.data_hash(root)):
         return None, ("AI commentary is stale (data changed since it was drafted) — "
                       "hidden; re-run scripts/advise.py --commentary")
+    if logic != LOGIC_VERSION:
+        return None, ("AI commentary is stale (report logic changed since it was drafted "
+                      "— its figures may not match the computed blocks) — hidden; re-run "
+                      "scripts/advise.py --commentary")
     return body, None

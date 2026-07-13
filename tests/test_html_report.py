@@ -6,6 +6,7 @@ import json
 import pandas as pd
 
 from advanced_reporting.agent import summaries as S
+from advanced_reporting.agent.commentary_agent import LOGIC_VERSION
 from advanced_reporting.reporting.html_report import REPORT_PATH, build_report
 
 
@@ -37,7 +38,8 @@ def _seed(root, with_spec=True, with_commentary=False, stale_commentary=False):
     if with_commentary:
         stamped = "wrong-hash" if stale_commentary else h
         (out / "commentary_ai.md").write_text(
-            "---\nstamp: s\ndata_hash: " + str(stamped) + "\n---\n\n"
+            "---\nstamp: s\ndata_hash: " + str(stamped)
+            + "\nlogic_version: " + LOGIC_VERSION + "\n---\n\n"
             "The claim ratio is **4.0x** on meta.\n\n## Recommendations\n\n"
             "- **investigate_tracking** _(analytics-measured)_ — check the pixel.",
             encoding="utf-8")
@@ -45,7 +47,7 @@ def _seed(root, with_spec=True, with_commentary=False, stale_commentary=False):
 
 def test_report_is_self_contained_and_spec_driven(tmp_path):
     _seed(tmp_path, with_spec=True, with_commentary=True)
-    out = build_report(tmp_path)
+    out = build_report(tmp_path, audience="internal")
     assert out == tmp_path / REPORT_PATH
     doc = out.read_text(encoding="utf-8")
     # self-contained: no external fetches of any kind
@@ -54,15 +56,30 @@ def test_report_is_self_contained_and_spec_driven(tmp_path):
     assert "data:image/png;base64," in doc          # charts embedded
     # spec framing applied
     assert "application starts" in doc
-    assert "meta claim ratio 4.0x" in doc           # watch flag
-    # commentary embedded with the stamp
+    assert "meta claim ratio 4.0x" in doc           # watch flag (internal only)
+    # commentary embedded with the internal stamp
     assert "AI-drafted from computed facts" in doc
     assert "investigate_tracking" in doc
 
 
+def test_client_report_strips_internal_language(tmp_path):
+    """Client-safe build (the default): no analyst watch flags, no "review before client
+    use" stamp, no enum keys — but the deterministic next-steps + channel scorecard stay."""
+    _seed(tmp_path, with_spec=True, with_commentary=True)
+    doc = build_report(tmp_path, audience="client").read_text(encoding="utf-8")
+    assert "Analyst watch flags" not in doc
+    assert "review before client use" not in doc
+    assert "recommendation_menu.md" not in doc
+    assert "investigate_tracking" not in doc        # enum key stripped
+    assert "AI-assisted commentary" in doc          # confidence framing
+    assert "do next" in doc                          # deterministic next-steps section
+    assert "Investigate conversion tracking" in doc  # plain-English rec title
+    assert "Channel scorecard" in doc
+
+
 def test_report_without_spec_or_commentary_is_honest(tmp_path):
     _seed(tmp_path, with_spec=False, with_commentary=False)
-    doc = build_report(tmp_path).read_text(encoding="utf-8")
+    doc = build_report(tmp_path, audience="internal").read_text(encoding="utf-8")
     assert "Deterministic default layout" in doc
     assert "No AI commentary was published" in doc
     assert "AI-drafted from computed facts" not in doc
@@ -70,8 +87,8 @@ def test_report_without_spec_or_commentary_is_honest(tmp_path):
 
 def test_report_excludes_stale_commentary(tmp_path):
     _seed(tmp_path, with_spec=True, with_commentary=True, stale_commentary=True)
-    doc = build_report(tmp_path).read_text(encoding="utf-8")
-    assert "investigate_tracking" not in doc        # stale body hidden
+    doc = build_report(tmp_path, audience="internal").read_text(encoding="utf-8")
+    assert "The claim ratio is" not in doc          # stale body hidden
     assert "stale" in doc                           # with the visible note
 
 

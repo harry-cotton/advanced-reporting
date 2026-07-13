@@ -69,6 +69,53 @@ def test_cost_per_outcome_ranking():
     assert "platform-claimed" in unmeasured["narrative"]
 
 
+# --- partial (clipped) edge weeks: a flight that starts/ends mid-week -------------------
+def _weekly_clipped_edges() -> pd.DataFrame:
+    """12 weeks, flat interior (200 outcome / $2k), first & last clipped to ~45% — the
+    shape that made the live "-12% MoM" that was really ~flat."""
+    dates = pd.date_range("2026-01-05", periods=12, freq="W-MON")
+    rows = []
+    for i, d in enumerate(dates):
+        edge = i in (0, len(dates) - 1)
+        ke, sp = (90.0, 900.0) if edge else (200.0, 2000.0)
+        rows.append({"date": d, "channel": "meta", "spend": sp,
+                     "conversions": ke * 2, "key_events": ke})
+    return pd.DataFrame(rows)
+
+
+def test_partial_edge_weeks_flags_first_and_last():
+    ser = _weekly_clipped_edges().groupby("date")["key_events"].sum().sort_index()
+    partial = insights._partial_edge_weeks(ser)
+    assert list(partial) == [ser.index[0], ser.index[-1]]
+    # a series with no clipped edges flags nothing
+    flat = pd.Series([200.0] * 8, index=pd.date_range("2026-01-05", periods=8, freq="W-MON"))
+    assert len(insights._partial_edge_weeks(flat)) == 0
+
+
+def test_recent_vs_prior_excludes_partial_weeks():
+    ser = _weekly_clipped_edges().groupby("date")["key_events"].sum().sort_index()
+    partial = insights._partial_edge_weeks(ser)
+    incl = insights._recent_vs_prior(ser)                    # clipped tail included
+    excl = insights._recent_vs_prior(ser, exclude=partial)   # clipped edges removed
+    assert incl < -0.10                                      # the false dip
+    assert abs(excl) < 0.02                                  # honest: interior is flat
+
+
+def test_kpi_trend_excludes_partial_weeks_and_says_so():
+    b = insights.kpi_trend_insight(_weekly_clipped_edges(), "application starts")
+    assert len(b["partial_weeks"]) == 2
+    assert "part-week" in b["narrative"]                     # transparency note woven in
+    assert abs(b["trend_pct"]) < 0.03                        # ~flat, not a fabricated drop
+    # the peak annotation ignores the clipped weeks (200, never the 90 edge)
+    assert "200" in b["annotations"][0][2]
+
+
+def test_headline_tiles_delta_flat_when_only_partial_edges_move():
+    tiles = {t["label"]: t for t in
+             insights.headline_tiles(_weekly_clipped_edges(), "application starts")}
+    assert tiles["Application starts"]["delta"] == "flat vs prior 4 wks"
+
+
 def test_pacing_without_budget_shows_run_rate():
     b = insights.pacing_insight(_weekly())
     assert b["budget"] is None

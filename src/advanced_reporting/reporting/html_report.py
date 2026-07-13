@@ -27,9 +27,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from ..agent.commentary_agent import STAMP, load_active_commentary  # noqa: E402
+from ..agent.recommendations import eligible_recommendations  # noqa: E402
 from ..agent.spec_agent import load_active_spec  # noqa: E402
 from ..agent.validate import BLOCK_CATALOG  # noqa: E402
 from ..dashboard import insights, theme  # noqa: E402
+from ..dashboard.mmm_view import load_mmm  # noqa: E402
 from ..utils import load_config, project_root, scope_to_sources  # noqa: E402
 
 REPORT_PATH = Path("outputs/client_report.html")
@@ -177,7 +179,8 @@ def _scorecard_html(sc: dict) -> str:
         f'<tr><td>{html.escape(r["label"])}</td>'
         f'<td class="num">{html.escape(r["value_str"])}</td>'
         f'<td><span class="chip chip-{r["verdict"]}">{r["verdict"]}</span></td>'
-        f'<td class="soft">{"configured target" if r["mode"] == "absolute" else "channel spread"}</td></tr>'
+        # truthful provenance: a benchmark band must never read as a "client target"
+        f'<td class="soft">{html.escape(r.get("provenance", "channel spread"))}</td></tr>'
         for r in sc["rag"])
     grid = "".join(f'<tr><td>{html.escape(k)}</td>'
                    f'<td class="num">{html.escape(v)}</td><td></td><td></td></tr>'
@@ -191,8 +194,74 @@ def _scorecard_html(sc: dict) -> str:
         f"<tbody>{rows}{grid}</tbody></table>")
 
 
+# ---------------------------------------------------------------- channel table + next steps
+def _channel_summary_html(weekly: pd.DataFrame, kpi_label: str) -> str:
+    """One row per channel: spend, outcome, cost/outcome, claimed, claim ratio — the
+    forwardable artifact a client sends to finance. Built from the same insight payloads."""
+    cp = insights.cost_per_outcome_insight(weekly, kpi_label)
+    if not cp:
+        return ""
+    measured = insights._has_measured(weekly)
+    ocol = "key_events" if measured else "conversions"
+    olabel = kpi_label.capitalize() if measured else "Claimed conv."
+    per = cp["per_channel"].copy()
+    ratios = {}
+    cv = insights.claims_vs_measured_insight(weekly, kpi_label)
+    if cv is not None:
+        for _, r in cv["per_channel"].iterrows():
+            ratios[r["channel"]] = (float(r["claimed"]), float(r["ratio"]))
+    body = []
+    for _, r in per.iterrows():
+        ch = r["channel"]
+        claimed, ratio = ratios.get(ch, (None, None))
+        extra = (f'<td class="num">{claimed:,.0f}</td><td class="num">{ratio:.1f}x</td>'
+                 if claimed is not None else '<td></td><td></td>')
+        body.append(
+            f'<tr><td>{html.escape(insights.channel_label(ch))}</td>'
+            f'<td class="num">{insights._money(r["spend"])}</td>'
+            f'<td class="num">{float(r[ocol]):,.0f}</td>'
+            f'<td class="num">{insights._money(r["cost_per"])}</td>{extra}</tr>')
+    head = (f'<th>Channel</th><th class="num">Spend</th><th class="num">{html.escape(olabel)}'
+            f'</th><th class="num">Cost / {html.escape(_singular(kpi_label))}</th>'
+            '<th class="num">Platform-claimed</th><th class="num">Claim ratio</th>')
+    return _section(
+        "Channel scorecard",
+        f'<table><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table>'
+        '<p class="soft">Cost per outcome is analytics-measured; platform-claimed and the '
+        'claim ratio are the platforms\' self-reported counts on the same campaigns.</p>')
+
+
+_REC_TITLES = {
+    "unlock_mmm": "Unlock incrementality measurement",
+    "investigate_tracking": "Investigate conversion tracking",
+    "fix_naming": "Adopt the naming convention on unparsed ad sets",
+    "shift_within_type": "Shift budget to the cheaper audience (same type)",
+    "scale_with_test": "Scale the top channel with a controlled test",
+    "cut_or_restructure": "Restructure the underperforming channel",
+    "rebalance_channel_budget": "Rebalance channel budget",
+}
+
+
+def _next_steps_html(recs: list[dict]) -> str:
+    """Deterministic 'What we'd do next' — plain-English titles over the eligibility
+    engine's computed summaries (no LLM, no invented numbers)."""
+    if not recs:
+        return ""
+    items = "".join(
+        f'<li><strong>{html.escape(_REC_TITLES.get(r["type"], r["type"].replace("_", " ").capitalize()))}'
+        f'</strong> — {html.escape(r.get("summary", ""))}</li>'
+        for r in recs[:3])
+    return _section("What we'd do next",
+                    f'<ul>{items}</ul><p class="soft">Prioritised by impact; drawn from the '
+                    'deterministic recommendation menu — never invented.</p>')
+
+
+def _singular(label: str) -> str:
+    return label[:-1] if label.endswith("s") else label
+
+
 # ---------------------------------------------------------------- the report
-def build_report(root: Path | None = None) -> Path:
+def build_report(root: Path | None = None, audience: str | None = None) -> Path:
     root = root or project_root()
     weekly_f = root / "data" / "processed" / "channel_weekly_metrics.csv"
     if not weekly_f.exists():
@@ -258,14 +327,34 @@ def build_report(root: Path | None = None) -> Path:
     blocks_html = "".join(renderers[n]() for n in (spec.get("blocks")
                                                    or BLOCK_CATALOG))
 
+    # --- audience mode: client-safe by default (strip internal AI-governance language) --
+    # explicit arg wins (tests / callers); else config; else client-safe.
+    audience = str(audience or rep.get("report_audience", "client")).lower()
+    client_mode = audience != "internal"
+
     # --- surrounding matter --------------------------------------------------------
     tiles = _tiles_html(insights.headline_tiles(weekly, kpi_label))
     lede = _md_to_html(insights.topline_summary(weekly, kpi_label))
-    scorecard = _scorecard_html(
-        insights.tier_scorecard(weekly, tier, targets=targets, kpi_label=kpi_label))
+    scorecard = _scorecard_html(insights.tier_scorecard(
+        weekly, tier, targets=targets, kpi_label=kpi_label,
+        config_target_keys=set(rep.get("targets") or {})))
+    channel_tbl = _channel_summary_html(weekly, kpi_label)
 
+    # deterministic next steps (no LLM): the eligibility engine's computed recommendations
+    mmm = load_mmm(root / "outputs")
+    unparsed = None
+    try:
+        from ..dashboard.drilldown import unparsed_stats
+        unparsed = unparsed_stats(hist) if hist is not None else None
+    except Exception:
+        unparsed = None
+    recs = eligible_recommendations(weekly, hist=hist, mmm=mmm, unparsed=unparsed)
+    next_steps = _next_steps_html(recs)
+
+    # analyst watch flags: internal only — a client deliverable never says "review before
+    # client use" inside itself, nor exposes enum keys / internal filenames
     flags_html = ""
-    if spec.get("watch_flags"):
+    if spec.get("watch_flags") and not client_mode:
         items = "".join(f"<li>{html.escape(f)}</li>" for f in spec["watch_flags"])
         flags_html = (
             '<aside class="flags"><h2>Analyst watch flags</h2>'
@@ -273,21 +362,40 @@ def build_report(root: Path | None = None) -> Path:
             f"client use.</p><ul>{items}</ul></aside>")
 
     commentary, c_note = load_active_commentary(root)
-    if commentary:
+    if commentary and client_mode:
+        # client framing: confidence, not a "review before use" warning; and strip the
+        # commentary's own "## Recommendations" (enum keys) — the plain-English "What we'd
+        # do next" section already carries them
+        body_client = commentary.split("## Recommendations")[0].rstrip()
+        ai_html = (
+            '<section class="ai"><h2>Commentary</h2>'
+            '<p class="stamp-ok">AI-assisted commentary — every figure verified against '
+            "this report's computed data.</p>"
+            f"{_md_to_html(body_client)}</section>")
+    elif commentary:
         ai_html = (
             '<section class="ai"><h2>Commentary</h2>'
             f'<p class="stamp">{html.escape(STAMP)}. Every number below was '
             "checked against the computed facts before publication; "
             "recommendations come only from the deterministically-eligible menu."
             f"</p>{_md_to_html(commentary)}</section>")
+    elif client_mode:
+        ai_html = ""      # no internal "nothing was published" note in a client report
     else:
         note = c_note or ("No AI commentary was published for this run — the "
                           "deterministic narrative above is the complete report.")
         ai_html = f'<section class="ai"><p class="soft">{html.escape(note)}</p></section>'
 
-    spec_line = ("Layout, labels and gauge bands arranged by the report-spec agent; "
-                 "every number is computed deterministically."
-                 if spec else (spec_note or "Deterministic default layout."))
+    # cover: "Prepared for [client] · [campaign]" when configured (reporting.client_name /
+    # reporting.campaign_name); the methodology note is a quiet footnote, not the subtitle
+    client_name = rep.get("client_name")
+    campaign_name = rep.get("campaign_name")
+    cover_bits = [b for b in (client_name, campaign_name) if b]
+    cover_html = (f'<p class="cover">Prepared for {html.escape(" · ".join(cover_bits))}</p>'
+                  if cover_bits else "")
+    method_line = ("Figures computed deterministically from the weekly data; layout by the "
+                   "report-spec agent." if spec
+                   else (spec_note or "Deterministic default layout."))
 
     css = f"""
     body {{ font-family: {theme.SANS}; color: {theme.INK}; background: {theme.PAPER};
@@ -319,6 +427,11 @@ def build_report(root: Path | None = None) -> Path:
     .ai {{ background: {theme.PAPER_TINT}; border-radius: 10px; padding: 20px 24px; }}
     .stamp {{ color: {theme.VERDICT_INK['warn']}; font-size: 0.85rem;
              border-bottom: 1px solid {theme.GRID}; padding-bottom: 10px; }}
+    .stamp-ok {{ color: {theme.INK_SOFT}; font-size: 0.85rem;
+             border-bottom: 1px solid {theme.GRID}; padding-bottom: 10px; }}
+    .cover {{ font-family: {theme.SERIF}; font-size: 1.05rem; color: {theme.INK};
+             margin: 2px 0 0; }}
+    .steps li {{ margin: 6px 0; }}
     footer {{ margin-top: 36px; padding-top: 14px; border-top: 1px solid {theme.GRID};
              color: {theme.INK_SOFT}; font-size: 0.82rem; }}
     """
@@ -331,14 +444,17 @@ def build_report(root: Path | None = None) -> Path:
 <body>
 <header>
   <h1>How the campaign is doing</h1>
+  {cover_html}
   <p class="soft">{html.escape(project)} · {lo:%d %b %Y} – {hi:%d %b %Y} ·
-  {len(insights._paid_channels(weekly))} paid channels · {html.escape(spec_line)}</p>
+  {len(insights._paid_channels(weekly))} paid channels · {html.escape(method_line)}</p>
 </header>
 {tiles}
 <div class="lede">{lede}</div>
 {flags_html}
 {blocks_html}
+{channel_tbl}
 {scorecard}
+{next_steps}
 {ai_html}
 <footer>
   <p>Attribution legend: <strong style="color:{theme.CLAIMED}">platform-claimed</strong>

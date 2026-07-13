@@ -119,7 +119,7 @@ metrics:
     format: currency
     higher_is_better: false
   - key: key_events
-    label: Key events (GA4)
+    label: Key events
     tier: outcome
     formula: key_events
     format: count

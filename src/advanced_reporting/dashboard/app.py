@@ -85,32 +85,45 @@ st.title("How the campaign is doing")
 lo, hi = weekly["date"].min(), weekly["date"].max()
 n_paid = len(insights._paid_channels(weekly))
 _ai_on = bool(rep.get("ai_commentary"))
-st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · every number "
-           "below is computed from the weekly tables — "
-           + ("the only generated prose is the clearly-stamped AI commentary "
-              "section at the end (numbers guard-checked against computed facts)."
-              if _ai_on else "no generated commentary. ")
-           + " Click a channel in any bar/donut to focus the whole dashboard on it.")
+st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · outcome measured "
+           f"as **{kpi_label}**. Click any channel to focus the whole dashboard on it.")
 if spec_note:
     st.caption(f"⚠ {spec_note}")
-if spec:
-    st.caption("Layout, labels and gauge bands arranged by the report-spec agent "
-               "(`outputs/report_spec.json`) — every number stays deterministic; "
-               "explicit config keys override the spec.")
-    if spec.get("watch_flags"):
-        with st.expander("Agent watch flags — AI-selected from computed evidence, "
-                         "review before client use"):
-            for flag in spec["watch_flags"]:
-                st.markdown(f"- {flag}")
+# Methodology + the agent's watch flags are analyst matter — relocated below the fold
+# (see the end of the page) so they don't sit above the numbers a CMO reads first.
+_watch_flags = spec.get("watch_flags") if spec else None
 filters.focus_chip()
 
-# --- executive tile row ------------------------------------------------------------
+# --- executive hero + supporting tiles ---------------------------------------------
+# One number owns the top: the primary outcome, large, with an honest sparkline (the
+# flight's part-weeks trimmed so the trend doesn't show a false end-cliff). The rest
+# support it. Falls back to a plain row if the outcome tile can't be identified.
 tiles = insights.headline_tiles(weekly, kpi_label)
-cols = st.columns(len(tiles))
-for col, t in zip(cols, tiles):
-    with col:
-        theme.metric_card(t["label"], t["value"], delta=t["delta"],
-                          delta_color=t["delta_color"], help=t.get("help"))
+_hero = next((t for t in tiles if t["delta_color"] == "normal"), tiles[0] if tiles else None)
+if _hero is not None:
+    _support = [t for t in tiles if t is not _hero]
+    _ocol = "key_events" if insights._has_measured(weekly) else "conversions"
+    _ser = (weekly[weekly["channel"].isin(insights._paid_channels(weekly))]
+            .groupby("date")[_ocol].sum(min_count=1).sort_index())
+    _ser = _ser.drop([e for e in insights._partial_edge_weeks(_ser) if e in _ser.index])
+    hcol, scol = st.columns([1.25, 2.4])
+    with hcol:
+        theme.hero_card(_hero["label"], _hero["value"], delta=_hero["delta"],
+                        delta_color=_hero["delta_color"], spark=_ser.tolist(),
+                        sub=("analytics-measured, paid campaigns"
+                             if insights._has_measured(weekly) else "platform-claimed"))
+    with scol:
+        scols = st.columns(len(_support))
+        for c, t in zip(scols, _support):
+            with c:
+                theme.metric_card(t["label"], t["value"], delta=t["delta"],
+                                  delta_color=t["delta_color"], help=t.get("help"))
+else:
+    cols = st.columns(len(tiles))
+    for col, t in zip(cols, tiles):
+        with col:
+            theme.metric_card(t["label"], t["value"], delta=t["delta"],
+                              delta_color=t["delta_color"], help=t.get("help"))
 st.divider()
 theme.lede(insights.topline_summary(weekly, kpi_label))
 
@@ -126,10 +139,25 @@ _tier_label = st.segmented_control(
     key="_tier_lens", label_visibility="collapsed",
     help="Awareness → reach, Engagement → intent, Action → outcome (the KPI pyramid).")
 _tier = _TIER_BY_LABEL.get(_tier_label or _default_label, "reach")
-# targets: spec fills the gaps, explicit config wins per metric key
+# targets: spec fills the gaps, explicit config wins per metric key. config_target_keys
+# lets the scorecard label a config band "client target" vs a spec band "industry benchmark".
 _targets = {**(spec.get("targets") or {}), **(rep.get("targets") or {})}
-_sc = insights.tier_scorecard(weekly, _tier, targets=_targets, kpi_label=kpi_label)
-theme.action_title(f"{_sc['label']} — pacing and efficiency against goal")
+_cfg_keys = set(rep.get("targets") or {})
+_sc = insights.tier_scorecard(weekly, _tier, targets=_targets, kpi_label=kpi_label,
+                              config_target_keys=_cfg_keys)
+
+
+def _tier_heading(sc: dict) -> str:
+    """An insight heading (not a template label): the tier's headline metric + verdict."""
+    r = sc["rag"][0] if sc["rag"] else None
+    if not r:
+        return f"{sc['label']} — not measured in the current data yet"
+    phrase = {"good": "comfortably inside", "warn": "pressing against",
+              "bad": "outside"}.get(r["verdict"], "against")
+    return f"{sc['label']} — {r['label']} {r['value_str']}, {phrase} the {r['provenance']}"
+
+
+theme.action_title(_tier_heading(_sc))
 _scL, _scR = st.columns([3, 2])
 with _scL:
     theme.render_bullets(_sc["pace"], _sc["rag"])
@@ -137,7 +165,10 @@ with _scL:
         st.info(f"The {_sc['label']} tier isn't measured in the current data yet.")
     if _sc["relative_bands"]:
         st.caption("Gauge bands = your **channel spread** (green third = best-performing "
-                   "channels); set `reporting.targets` in config for absolute goals.")
+                   "channels), not an absolute target — set `reporting.targets` in config "
+                   "for client goals.")
+    elif any(r["provenance"] == "industry benchmark" for r in _sc["rag"]):
+        st.caption("Gauge bands are an **industry benchmark**, not a client-set target.")
 with _scR:
     if _sc["grid"]:
         theme.metric_grid(f"{_sc['label']} totals", _sc["grid"], cols=2)
@@ -236,7 +267,7 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
                 textinfo="percent", textfont=dict(size=12)))
             fig.update_layout(annotations=[dict(text="Spend<br>mix", showarrow=False,
                               font=dict(family=theme.SANS, size=14, color=theme.INK_SOFT))])
-            theme.plotly_chart(fig, height=300, legend=False)
+            theme.plotly_chart(fig, height=300, legend=True)
 
     elif fm == "conversions":
         b_cv = insights.claims_vs_measured_insight(scoped, kpi_label)
@@ -276,11 +307,13 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
         with left:
             fig = go.Figure()
             fig.add_bar(x=labels, y=per["spend"], name="Spend",
-                        marker_color=theme.CLAIMED)
+                        marker_color=theme.SPEND)
             fig.add_bar(x=labels, y=per["revenue"], name="Platform revenue",
-                        marker_color=theme.MEASURED)
+                        marker_color=theme.CLAIMED)   # platform-attributed = claimed
             fig.update_layout(barmode="group")
             theme.plotly_chart(fig, yfmt="currency", height=300)
+            st.caption("Spend is graphite (money in); platform-attributed revenue is "
+                       "amber (self-reported, like all claimed figures).")
         with right:
             fig = go.Figure(go.Bar(
                 y=labels[::-1], x=per["roas"].tolist()[::-1], orientation="h",
@@ -313,22 +346,32 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
                     marker_color=[theme.channel_color(c, i) for i, c in enumerate(eng["channel"])],
                     text=[f"{v * 100:.1f}%" for v in eng["eng_rate"]], textposition="outside"))
                 theme.plotly_chart(fig, xfmt="pct", height=300, legend=False)
-                st.caption("Engagement rate = engaged sessions / total sessions (GA4).")
+                st.caption("Engagement rate = engaged sessions / total sessions "
+                           "(web analytics).")
         else:
             st.info("Sessions data isn't in the processed metrics yet. "
-                    "Re-run the pipeline after GA4 engagement columns are populated.")
+                    "Re-run the pipeline after engagement columns are populated.")
     st.divider()
 
 
 # --- quick views + their dynamic focus block (control sits right above its output) --
+# ROAS/revenue only makes sense when platform revenue is tracked — otherwise the lens
+# renders all-0.00x bars on a degenerate axis, so drop it. Engagement likewise needs
+# sessions. "Spend mix" replaces the old "Budget" pill (there's no budget plan here).
+_has_revenue = ("platform_revenue" in weekly
+                and float(weekly["platform_revenue"].fillna(0).sum()) > 0)
+_has_sessions = ("sessions" in weekly and weekly["sessions"].notna().any()
+                 and float(weekly["sessions"].fillna(0).sum()) > 0)
 _PRESET_QUERIES = {
     "Clicks":      "break down click performance",
-    "Budget":      "where is my budget going",
-    "ROAS":        "what is the ROAS",
+    "Spend mix":   "where is my budget going",
     "Impressions": "show impressions by channel",
     "Conversions": "conversion breakdown",
-    "Engagement":  "engagement performance",
 }
+if _has_revenue:
+    _PRESET_QUERIES["ROAS"] = "what is the ROAS"
+if _has_sessions:
+    _PRESET_QUERIES["Engagement"] = "engagement performance"
 theme.action_title("Quick views",
                    "Tap a lens to drop a focused breakdown in below; tap again to clear.")
 _picked = st.pills("Quick views", list(_PRESET_QUERIES), selection_mode="single",
@@ -358,6 +401,17 @@ def _block_kpi_trend() -> None:
             fig.add_scatter(x=b["series"].index, y=b["series"][name], name=name,
                             mode="lines", stackgroup="kpi",
                             line=dict(color=colors.get(name, theme.INK_SOFT), width=2))
+        # hollow "ghost" markers on the flight's clipped edge weeks — the honesty
+        # grammar (hollow = partial), so the end-dip reads as incomplete, not a fall
+        if b.get("partial_weeks"):
+            px = [d for d, _ in b["partial_weeks"]]
+            py = [v for _, v in b["partial_weeks"]]
+            fig.add_scatter(x=px, y=py, mode="markers", name="Partial week",
+                            showlegend=False,
+                            marker=dict(size=10, color=theme.PAPER,
+                                        line=dict(color=theme.GHOST, width=2)),
+                            hovertemplate="partial week (clipped): %{y:,.0f}<extra></extra>")
+            theme.annotate(fig, px[-1], py[-1], "partial week", above=False)
         for x, y, text in b["annotations"]:
             theme.annotate(fig, x, y, text)
         theme.plotly_chart(fig, yfmt="count", height=340)
@@ -423,18 +477,23 @@ def _block_audience_callout() -> None:
             per = b["per_audience"].head(6)
             labels = [f"{r['audience_type']} · {r['audience_detail']}"
                       for _, r in per.iterrows()]
-            colors = [theme.ACCENT if r["audience_type"] == "PROSPECT" else theme.CLAIMED
+            # audience TYPES get their own hues (never the reserved amber/ink — all these
+            # figures are platform-claimed, so amber-for-retargeting would clash)
+            _atype = {"PROSPECT": "#4E79A7", "RETARGET": "#2A9D8F"}
+            colors = [_atype.get(r["audience_type"], theme.GHOST)
                       for _, r in per.iterrows()]
             fig = go.Figure(go.Bar(
                 y=labels[::-1], x=per["cost_per_claimed"].tolist()[::-1],
                 orientation="h", marker_color=colors[::-1],
                 text=[insights._money(v) for v in per["cost_per_claimed"]][::-1],
                 textposition="outside"))
+            fig.update_xaxes(range=[0, float(per["cost_per_claimed"].max()) * 1.18])
             theme.plotly_chart(fig, xfmt="currency",
                                height=80 + 44 * len(per), legend=False)
-            st.caption("Platform-claimed conversions per audience, "
-                       "decoded from ad-set names. Blue = prospecting, "
-                       "amber = retargeting.")
+            st.caption("Cost per **platform-claimed** conversion per audience, decoded "
+                       "from ad-set names (slate = prospecting, teal = retargeting). "
+                       "Warm retargeting audiences convert cheaper by construction — "
+                       "compare within a type.")
             theme.prose(b["narrative"])
         st.divider()
 
@@ -449,8 +508,8 @@ def _block_pacing() -> None:
             cum = b["cumulative"]
             fig = go.Figure()
             fig.add_scatter(x=cum.index, y=cum.values, name="Cumulative spend",
-                            mode="lines", line=dict(color=theme.ACCENT, width=2.5),
-                            fill="tozeroy", fillcolor="rgba(31,78,121,0.08)")
+                            mode="lines", line=dict(color=theme.SPEND, width=2.5),
+                            fill="tozeroy", fillcolor="rgba(122,114,102,0.10)")
             if b["budget"]:
                 plan_x = [cum.index.min(), cum.index.min()
                           + pd.Timedelta(weeks=b["budget"]["flight_weeks"])]
@@ -498,10 +557,10 @@ if _ai_on:
         st.divider()
         theme.action_title("AI commentary", STAMP)
         if _ai_body:
-            st.markdown(_ai_body)
-            st.caption("Every numeral above was checked against the computed facts "
-                       "payload before publication; recommendations come only from "
-                       "the deterministically-eligible menu.")
+            theme.ai_block(_ai_body)
+            st.caption("Every number above was checked against the computed data before "
+                       "publication; recommendations come only from the "
+                       "deterministically-eligible menu.")
         else:
             st.info(_ai_note or "No AI commentary yet — run "
                     "`python scripts/advise.py --commentary`.")
@@ -516,7 +575,21 @@ if notes:
         for note in notes:
             st.markdown(f"- {note}")
 
+# --- analyst notes: methodology + the agent's watch flags (pre-client review) -------
+# Relocated from the masthead — analyst matter, kept below the fold and collapsed so a
+# CMO reads the numbers first but a reviewer still has the caveats before client sign-off.
+if _watch_flags or spec:
+    with _narrow():
+        st.divider()
+        with st.expander("Analyst notes — methodology & watch flags (pre-client review)"):
+            if spec:
+                st.caption("Layout, labels and gauge bands were arranged by the "
+                           "report-spec agent (`outputs/report_spec.json`); every number "
+                           "stays deterministic and explicit config keys override the spec.")
+            for flag in (_watch_flags or []):
+                st.markdown(f"- {flag}")
+
 st.divider()
-st.caption("Drill down: **Explore** in the sidebar has the KPI pyramid, funnel, "
+st.caption("Drill down: **Explore** in the top nav has the KPI pyramid, funnel, "
            "free-text lens and per-channel tables. Commentary and data-quality "
            "reports are written to `outputs/` by the pipeline.")

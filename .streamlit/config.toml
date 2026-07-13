@@ -10,3 +10,8 @@ font = "sans serif"
 
 [browser]
 gatherUsageStats = false
+
+# Hide the "Deploy" button + dev toolbar so a client demo reads as a product, not a
+# Streamlit dev session.
+[client]
+toolbarMode = "minimal"

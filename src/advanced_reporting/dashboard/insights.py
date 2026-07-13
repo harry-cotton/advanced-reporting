@@ -32,6 +32,9 @@ CHANNEL_LABELS = {
     "meta": "Meta",
     "linkedin": "LinkedIn",
     "tiktok": "TikTok",
+    "youtube": "YouTube",
+    "display": "Display",
+    "email": "Email",
     "organic_search": "Organic search",
     "direct": "Direct",
 }
@@ -73,9 +76,43 @@ def _trend_phrase(pct: float) -> str:
     return "holding steady"
 
 
-def _recent_vs_prior(series: pd.Series, window: int = 4) -> float:
-    """Pct change of the trailing ``window`` weeks vs the ``window`` before them."""
+def _partial_edge_weeks(series: pd.Series, frac: float = 0.65) -> pd.Index:
+    """Index labels of the flight's clipped opening/closing week(s).
+
+    A campaign that starts/ends mid-week leaves the FIRST and/or LAST weekly bucket
+    covering only a few days, so its spend/volume is a fraction of a full week — and a
+    trailing-window delta that includes it reads as a collapse that never happened (the
+    live "-12% MoM" that is really ~-3%). The pipeline calendar-gap-fills interior weeks
+    to full buckets, so only an EDGE bucket can be a genuine part-week; we flag one whose
+    value is < ``frac`` of the interior median. (Detecting via a coverage column would be
+    cleaner, but that column would change the hash the stamped AI artifacts are keyed on.)
+
+    Detect on a VOLUME/spend series and reuse the result for derived ratios (a cost-per
+    ratio stays ~normal in a part-week, so it can't self-detect).
+    """
     s = series.dropna()
+    if len(s) < 4:
+        return s.index[:0]
+    interior = s.iloc[1:-1]
+    med = float(interior.median()) if len(interior) else float("nan")
+    if not med or pd.isna(med) or med <= 0:
+        return s.index[:0]
+    drop = [lbl for lbl, first_last in ((s.index[0], s.iloc[0]), (s.index[-1], s.iloc[-1]))
+            if float(first_last) < frac * med]
+    return pd.Index(drop)
+
+
+def _recent_vs_prior(series: pd.Series, window: int = 4,
+                     exclude: pd.Index | None = None) -> float:
+    """Pct change of the trailing ``window`` weeks vs the ``window`` before them.
+
+    ``exclude`` drops known part-weeks (from ``_partial_edge_weeks``, computed once on a
+    volume series) so the same weeks are removed from every derived series before the
+    window is taken. Without it, a clipped edge week silently skews the delta.
+    """
+    s = series.dropna()
+    if exclude is not None and len(exclude):
+        s = s.drop([e for e in exclude if e in s.index])
     if len(s) < 2 * window:
         window = max(len(s) // 2, 1)
     recent, prior = s.iloc[-window:].sum(), s.iloc[-2 * window:-window].sum()
@@ -95,20 +132,25 @@ def headline_tiles(weekly: pd.DataFrame, kpi_label: str = "key events") -> list[
     out_label = kpi_label if measured else "claimed conversions"
     paid = weekly[weekly["channel"].isin(_paid_channels(weekly))]
 
-    def _delta(series: pd.Series) -> str | None:
-        pct = _recent_vs_prior(series)
-        return None if pd.isna(pct) else f"{pct * 100:+.0f}% vs prior 4 wks"
-
     spend_w = paid.groupby("date")["spend"].sum().sort_index()
     out_w = paid.groupby("date")[col].sum(min_count=1).sort_index()
     total_out = float(out_w.sum())
+    # detect the flight's part-weeks once (on spend) and exclude them from every delta
+    _partial = _partial_edge_weeks(spend_w)
+
+    def _delta(series: pd.Series) -> str | None:
+        pct = _recent_vs_prior(series, exclude=_partial)
+        if pd.isna(pct):
+            return None
+        return ("flat vs prior 4 wks" if abs(pct) < 0.005
+                else f"{pct * 100:+.0f}% vs prior 4 wks")
 
     tiles = [
         {"label": "Spend", "value": _money(spend_w.sum()), "delta": _delta(spend_w),
          "delta_color": "off", "help": "Paid media spend over the reporting period."},
         {"label": out_label.capitalize(), "value": f"{total_out:,.0f}",
          "delta": _delta(out_w), "delta_color": "normal",
-         "help": ("Analytics-measured (GA4) outcomes on paid campaigns." if measured
+         "help": ("Analytics-measured outcomes on paid campaigns." if measured
                   else "Platform-claimed conversions — no analytics series yet.")},
     ]
     if total_out > 0:
@@ -201,15 +243,35 @@ def _rag_gauge(value: float, higher_is_better: bool, good: float | None = None,
             "verdict": verdict, "mode": mode}
 
 
+def _outcome_relabel(key: str, label: str, kpi_label: str, measured: bool) -> str:
+    """Relabel the outcome-tier metrics with the engagement's own KPI wording, so the
+    scorecard says "Application starts" / "Cost / application start" — consistent with the
+    tiles and prose, and free of the hardcoded, wrong-here "(GA4)" vendor tag."""
+    if not measured:
+        return label
+    if key == "key_events":
+        return kpi_label.capitalize()
+    if key == "cost_per_key_event":
+        return f"Cost / {_singular(kpi_label)}"
+    return label
+
+
 def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
-                   kpi_label: str = "key events") -> dict:
+                   kpi_label: str = "key events",
+                   config_target_keys: set | None = None) -> dict:
     """Goal-gauge scorecard for one pyramid tier (the Awareness/Engagement/Action band).
 
     Returns ``{tier, label, pace[], rag[], grid[], measured, relative_bands}``:
     ``pace`` = pacing bullets (volume metrics with a configured goal), ``rag`` = graded
     efficiency/quality bullets, ``grid`` = the totals card (Spend + un-goaled volumes).
+
+    Each graded ``rag`` entry carries a ``provenance`` string ("client target" /
+    "industry benchmark" / "channel spread") so prose can't call a benchmark band the
+    "client's own configured target". ``config_target_keys`` = metric keys whose bands
+    came from explicit config (vs the report-spec agent's benchmark suggestion).
     """
     targets = targets or {}
+    config_target_keys = config_target_keys or set()
     reg = M.load_metric_registry()
     nat = {r["metric"]: r for r in M.compute_metrics(weekly, by=None, registry=reg)
            .to_dict("records")}
@@ -220,9 +282,14 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
     rag_keys = list(_TIER_RAG.get(tier, []))
     vol_keys = list(_TIER_VOLUME.get(tier, []))
     measured = _has_measured(weekly)
-    if tier == "outcome" and not measured:     # no GA4 series → fall back to claimed/CPA
+    if tier == "outcome" and not measured:     # no measured series → fall back to claimed/CPA
         rag_keys = ["cpa" if k == "cost_per_key_event" else k for k in rag_keys]
         vol_keys = ["conversions" if k == "key_events" else k for k in vol_keys]
+
+    def _prov(key: str, mode: str) -> str:
+        if mode != "absolute":
+            return "channel spread"
+        return "client target" if key in config_target_keys else "industry benchmark"
 
     rag = []
     for key in rag_keys:
@@ -238,8 +305,10 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
                        good=t.get("good"), warn=t.get("warn"), sample=sample)
         if g is None:
             continue
-        rag.append({"key": key, "label": rec["label"],
-                    "value_str": _fmt(rec["value"], rec["format"]), **g})
+        rag.append({"key": key,
+                    "label": _outcome_relabel(key, rec["label"], kpi_label, measured),
+                    "value_str": _fmt(rec["value"], rec["format"]),
+                    "provenance": _prov(key, g["mode"]), **g})
 
     pace, grid = [], []
     grid.append(("Spend", _money(float(paid["spend"].sum()))))
@@ -248,6 +317,7 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
         if rec is None or pd.isna(rec["value"]) or float(rec["value"]) == 0.0:
             continue                           # unpopulated column → omit, don't show "0"
         val, vstr = float(rec["value"]), _fmt(rec["value"], rec["format"])
+        rec = {**rec, "label": _outcome_relabel(key, rec["label"], kpi_label, measured)}
         goal = (targets.get(key, {}) or {}).get("goal")
         if goal and goal > 0:
             scale = max(val, float(goal))
@@ -282,8 +352,12 @@ def kpi_trend_insight(weekly: pd.DataFrame, kpi_label: str = "key events") -> di
     total_n = float(total.sum())
     paid_share = (float(series.get("Paid media", pd.Series(dtype=float)).sum()) / total_n
                   if total_n else float("nan"))
-    pct = _recent_vs_prior(total)
-    peak_date = total.idxmax()
+    partial = _partial_edge_weeks(total)
+    pct = _recent_vs_prior(total, exclude=partial)
+    # peak among COMPLETE weeks — a clipped edge week can't be the "peak"
+    complete = total.drop([e for e in partial if e in total.index])
+    peak_date = complete.idxmax() if len(complete) else total.idxmax()
+    peak_val = float(complete.max()) if len(complete) else float(total.max())
 
     # top paid channel by the same outcome column
     per_paid = (weekly[weekly["channel"].isin(paid)]
@@ -291,23 +365,26 @@ def kpi_trend_insight(weekly: pd.DataFrame, kpi_label: str = "key events") -> di
     top_channel, top_n = (per_paid.index[-1], float(per_paid.iloc[-1])) \
         if len(per_paid) else (None, 0.0)
 
+    mixed = paid_share == paid_share and paid_share < 0.995   # not an all-paid flight
     title = f"{label.capitalize()} are {_trend_phrase(pct)} month-on-month"
     narrative = (
         f"The period produced **{total_n:,.0f} {label}**"
-        + (f", **{paid_share * 100:.0f}%** of them on paid campaigns"
-           if paid_share == paid_share else "")
+        + (f", **{paid_share * 100:.0f}%** of them on paid campaigns" if mixed else "")
         + f"; the last four weeks are {_trend_phrase(pct)} versus the four before. ")
     if top_channel:
         narrative += (f"**{channel_label(top_channel)}** is the largest paid "
                       f"contributor ({top_n:,.0f} {label}).")
+    if len(partial):
+        narrative += (" _The trend excludes the flight's part-week(s) at the start/finish "
+                      "(only a few days each), which would otherwise read as a false dip._")
     if not measured:
         narrative += (" _No analytics-measured outcome series yet — these are the "
                       "platforms' own conversion claims; treat them as directional._")
     return {
         "title": title, "narrative": narrative, "series": series,
         "measured": measured, "label": label, "trend_pct": pct,
-        "annotations": [(peak_date, float(total.max()),
-                         f"peak week: {total.max():,.0f}")],
+        "partial_weeks": [(d, float(total.loc[d])) for d in partial if d in total.index],
+        "annotations": [(peak_date, peak_val, f"peak week: {peak_val:,.0f}")],
     }
 
 
@@ -364,6 +441,9 @@ def cost_per_outcome_insight(weekly: pd.DataFrame,
     per["cost_per"] = per["spend"] / per[col]
     per = per.sort_values("cost_per").reset_index()
 
+    # blended cost = total spend / total outcomes — matches the headline tile exactly
+    # (an unweighted mean of the per-channel costs would disagree by a few cents)
+    blended = float(per["spend"].sum()) / float(per[col].sum())
     cheap, dear = per.iloc[0], per.iloc[-1]
     if len(per) >= 2 and dear["cost_per"] / cheap["cost_per"] >= 1.15:
         mult = dear["cost_per"] / cheap["cost_per"]
@@ -371,8 +451,7 @@ def cost_per_outcome_insight(weekly: pd.DataFrame,
                  f"{_money(cheap['cost_per'])} — {mult:.1f}x cheaper than "
                  f"{channel_label(dear['channel'])}")
     else:
-        title = (f"Paid channels deliver {_a(label)} for about "
-                 f"{_money(per['cost_per'].mean())}")
+        title = (f"Paid channels deliver {_a(label)} for about {_money(blended)}")
     narrative = (
         "Cost per outcome ranks "
         + ", ".join(f"**{channel_label(r['channel'])}** at {_money(r['cost_per'])}"
@@ -400,9 +479,12 @@ def pacing_insight(weekly: pd.DataFrame, budget: dict | None = None) -> dict | N
     if by_week.empty or float(by_week.sum()) <= 0:
         return None
     cum = by_week.cumsum()
-    total_spend = float(cum.iloc[-1])
+    total_spend = float(cum.iloc[-1])       # cumulative TOTAL keeps every dollar spent
     n_weeks = len(by_week)
-    run_rate = float(by_week.iloc[-4:].mean())
+    # run rate = a typical FULL week, so exclude the flight's clipped edge weeks (else a
+    # part-week drags the average down and the projection understates)
+    full = by_week.drop([e for e in _partial_edge_weeks(by_week) if e in by_week.index])
+    run_rate = float((full if len(full) else by_week).iloc[-4:].mean())
 
     out = {"cumulative": cum, "run_rate": run_rate, "total_spend": total_spend,
            "n_weeks": n_weeks, "budget": None}
@@ -460,7 +542,9 @@ def topline_summary(weekly: pd.DataFrame, kpi_label: str = "key events") -> str:
 
     pct = float("nan")
     if total_out > 0:
-        pct = _recent_vs_prior(paid.groupby("date")[col].sum(min_count=1).sort_index())
+        _spend_w = paid.groupby("date")["spend"].sum().sort_index()
+        pct = _recent_vs_prior(paid.groupby("date")[col].sum(min_count=1).sort_index(),
+                               exclude=_partial_edge_weeks(_spend_w))
 
     s1 = (f"Paid media spent **{_money(total_spend)}** and delivered "
           f"**{total_out:,.0f} {label}** across {ch_word}"

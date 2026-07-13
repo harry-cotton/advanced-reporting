@@ -11,6 +11,7 @@ Keep the palette in sync with ``.streamlit/config.toml``.
 from __future__ import annotations
 
 import re
+import zlib
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -32,10 +33,25 @@ NEGATIVE = "#C62828"
 BAND_FILL = {"good": "#E4EEE4", "warn": "#F7EBD3", "bad": "#F4DEDE"}
 VERDICT_INK = {"good": POSITIVE, "warn": "#B26A00", "bad": NEGATIVE}
 
+# --- the reserved semantic palette (colour MEANS something; never reuse off-meaning) ---
 # The signature honesty pair: platform-CLAIMED numbers are amber (self-graded),
-# analytics-MEASURED numbers are ink blue. Never swap or reuse these for anything else.
+# analytics-MEASURED numbers are ink blue. Never swap or reuse these for anything else —
+# amber on a chart now reads "unverified", so spend/efficiency marks must NOT be amber.
 CLAIMED = "#E08A00"
 MEASURED = "#1F4E79"
+# Money in (spend/cost) is context, not a verdict — a neutral warm graphite so it never
+# competes with the claimed/measured semantic or a RAG hue. The default combo bar colour.
+SPEND = "#7A7266"
+# Efficiency/rate LINES on combos (CPM/CPC/CPA over time): a quiet near-ink, so a combo
+# reads mono (graphite bar + dark line) rather than borrowing the claimed amber.
+EFFICIENCY = "#2E2E3A"
+
+# Confidence vocabulary for marks (the honesty product's visual grammar):
+#   solid fill   = measured / actual
+#   hatched      = modelled (MMM overlays — carry a 90% interval)
+#   hollow/ghost = partial or incomplete (e.g. a flight's clipped opening/closing week)
+GHOST = "#B8B2A6"          # hollow-marker ring / partial-period fill
+HATCH = "/"                 # plotly pattern shape reserved for modelled series
 
 # Editorial type: Fraunces (display serif) + Source Sans 3, loaded from Google Fonts in
 # inject_css with system fallbacks — if the CDN is blocked (corporate proxy / offline),
@@ -43,17 +59,26 @@ MEASURED = "#1F4E79"
 SERIF = "'Fraunces', Georgia, 'Times New Roman', serif"
 SANS = "'Source Sans 3', 'Source Sans Pro', 'Segoe UI', sans-serif"
 
+# Each channel gets ONE fixed identity colour, assigned here once and used ONLY in
+# channel-comparison charts (spend mix, trends, ROAS) — never recoloured by value, so a
+# channel keeps the same hue on every chart and page. Chosen to stay clear of the amber/
+# ink honesty pair and of pure RAG red/green (which mean "verdict", not "channel").
 CHANNEL_COLORS = {
-    "google_search": "#3B6FB5",
-    "google_demandgen": "#5FA8A0",
-    "google_pmax": "#7C9ED9",
-    "meta": "#8E5AA8",
-    "linkedin": "#0A66C2",
+    "google_search": "#4E79A7",
+    "google_demandgen": "#76B7B2",
+    "google_pmax": "#86BCB6",
+    "meta": "#8E5AA8",          # violet
+    "linkedin": "#4A90B8",
     "tiktok": "#3A3A3A",
+    "display": "#2A9D8F",       # teal
+    "email": "#4E79A7",         # slate blue
+    "youtube": "#C15C4E",       # terracotta
     "organic_search": "#8A8F98",
     "direct": "#B9B2A6",
 }
-_EXTRA_COLORS = ["#C25B4E", "#6B8E23", "#B8860B", "#4682B4"]  # unmapped channels
+# Deterministic fallback ramp for unmapped channels — picked by a stable hash of the
+# NAME (not call order), so an unmapped channel never swaps colour between charts.
+_EXTRA_COLORS = ["#6B8E23", "#B8860B", "#9C6BA3", "#4682B4", "#B0623A", "#5A8A6E"]
 
 # Validated bar+line combo palettes (bar = volume, line = efficiency) — one per combo so
 # the charts don't all read as the same blue/amber. Every hex passes the dataviz checks
@@ -75,18 +100,26 @@ TICKFORMAT = {"currency": "$,.0f", "count": ",.0f", "pct": ".1%", "ratio": ".2f"
 
 
 def channel_color(channel: str, i: int = 0) -> str:
-    return CHANNEL_COLORS.get(channel, _EXTRA_COLORS[i % len(_EXTRA_COLORS)])
+    """The channel's fixed identity colour. ``i`` is ignored for mapped channels and,
+    for unmapped ones, superseded by a stable name hash so colour never depends on the
+    order channels happen to be drawn in (the old ``i % n`` caused chart-to-chart swaps).
+    """
+    if channel in CHANNEL_COLORS:
+        return CHANNEL_COLORS[channel]
+    idx = zlib.crc32(str(channel).encode()) % len(_EXTRA_COLORS)
+    return _EXTRA_COLORS[idx]
 
 
 # ---------------------------------------------------------------- page chrome
-# Pages in display order: (label, path-relative-to-app.py)
+# Nav is grouped: the client STORY arc (what a CMO reads top-to-bottom), then a gutter,
+# then the ANALYST tools. (label, path-relative-to-app.py, group).
 _NAV_PAGES = [
-    ("Exec Summary", "app.py"),
-    ("Channels",     "pages/1_Channels.py"),
-    ("Audiences",    "pages/2_Audiences.py"),
-    ("Results",      "pages/5_Results.py"),
-    ("Data Quality", "pages/3_Data_Quality.py"),
-    ("Explore",      "pages/4_Explore.py"),
+    ("Exec Summary", "app.py",                 "story"),
+    ("Channels",     "pages/1_Channels.py",    "story"),
+    ("Audiences",    "pages/2_Audiences.py",   "story"),
+    ("Incrementality", "pages/5_Results.py",   "story"),
+    ("Data Quality", "pages/3_Data_Quality.py", "tools"),
+    ("Explore",      "pages/4_Explore.py",      "tools"),
 ]
 
 
@@ -130,15 +163,25 @@ def inject_css() -> None:
 
 
 def nav_bar() -> None:
-    """Horizontal top navigation — row of page links + a separator line.
+    """Horizontal top navigation — the client story arc, a gutter, then analyst tools.
 
     Call immediately after inject_css() on every page. Paths are relative to
     the dashboard app.py entrypoint (src/advanced_reporting/dashboard/).
     """
-    cols = st.columns(len(_NAV_PAGES))
-    for col, (label, path) in zip(cols, _NAV_PAGES):
-        with col:
+    story = [p for p in _NAV_PAGES if p[2] == "story"]
+    tools = [p for p in _NAV_PAGES if p[2] == "tools"]
+    # a narrow empty gutter column visually separates the two groups
+    cols = st.columns([*([1] * len(story)), 0.4, *([1] * len(tools))])
+    i = 0
+    for label, path, _ in story:
+        with cols[i]:
             st.page_link(path, label=label, use_container_width=True)
+        i += 1
+    i += 1  # skip the gutter
+    for label, path, _ in tools:
+        with cols[i]:
+            st.page_link(path, label=label, use_container_width=True)
+        i += 1
     st.markdown(
         f'<div style="border-bottom:1px solid {GRID};margin:-0.5rem 0 1rem 0"></div>',
         unsafe_allow_html=True,
@@ -176,6 +219,112 @@ def prose(text: str) -> None:
     st.markdown(_escape_math(text))
 
 
+def ai_block(md: str) -> None:
+    """Render AI-drafted commentary as tinted, set-apart HTML.
+
+    Converts our own markdown to HTML (where ``$`` is literal — Streamlit runs no KaTeX
+    inside a raw-HTML block, so this fixes the garbled "35.2k∗∗in spend" the plain
+    ``st.markdown`` produced) and DEMOTES ``##`` headings to a quiet small-caps sub-head so
+    generated prose never competes with the page's real serif section titles.
+    """
+    import html as _h
+    out: list[str] = []
+    in_list = False
+    for raw in md.splitlines():
+        line = _h.escape(raw.rstrip())
+        line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+        line = re.sub(r"(?<![\w_])_([^_]+)_(?![\w_])", r"<em>\1</em>", line)
+        if line.startswith("## "):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f'<div style="font-family:{SANS};font-size:0.8rem;font-weight:700;'
+                       f'letter-spacing:0.06em;text-transform:uppercase;color:{INK_SOFT};'
+                       f'margin:1.1rem 0 0.3rem">{line[3:]}</div>')
+        elif line.startswith("- "):
+            if not in_list:
+                out.append('<ul style="margin:0.3rem 0 0.3rem 1.1rem;padding:0">')
+                in_list = True
+            out.append(f"<li>{line[2:]}</li>")
+        elif line:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f'<p style="margin:0.5rem 0">{line}</p>')
+    if in_list:
+        out.append("</ul>")
+    st.markdown(
+        f'<div style="background:{PAPER_TINT};border:1px solid {GRID};border-radius:8px;'
+        f'padding:0.5rem 1.3rem 1rem">{"".join(out)}</div>',
+        unsafe_allow_html=True)
+
+
+def _delta_html(delta: str | None, delta_color: str, size: str = "0.82rem") -> str:
+    """Shared delta chip. Direction is shown by an arrow OR a sign, never both (the old
+    "▼ -12%" read as a double negative): graded metrics use a coloured arrow + unsigned
+    magnitude; a neutral ("off") metric keeps the sign (no arrow to carry direction); a
+    near-zero move reads "flat"."""
+    if not delta:
+        return ""
+    pos, neg = delta.startswith("+"), delta.startswith("-")
+    magnitude = delta.lstrip("+-")                  # "12% vs prior 4 wks"
+    flat = magnitude.startswith("0%") or delta.startswith("flat") or not (pos or neg)
+    if flat:
+        color, arrow = INK_SOFT, ""
+        text = _html_inline("flat vs prior 4 wks" if magnitude.startswith("0%") else delta)
+    elif delta_color == "off":                       # neutral metric: keep the sign
+        color, arrow, text = INK_SOFT, "", _html_inline(delta)
+    elif delta_color == "inverse":                   # cost metric: down = good
+        color, arrow = (POSITIVE, "▼ ") if neg else (NEGATIVE, "▲ ")
+        text = _html_inline(magnitude)
+    else:                                            # volume/rate: up = good
+        color, arrow = (POSITIVE, "▲ ") if pos else (NEGATIVE, "▼ ")
+        text = _html_inline(magnitude)
+    return (f'<div style="font-family:{SANS};font-size:{size};'
+            f'color:{color};margin-top:0.3rem">{arrow}{text}</div>')
+
+
+def _sparkline_svg(values, color: str = ACCENT, w: int = 200, h: int = 42) -> str:
+    """A tiny inline trend line for the hero stat — self-contained SVG (no extra chart
+    element), so it lives inside the card's HTML."""
+    vals = [float(v) for v in values if v is not None and v == v]
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1.0
+    n = len(vals)
+    pts = " ".join(f"{i / (n - 1) * (w - 4) + 2:.1f},"
+                   f"{h - 3 - (v - lo) / rng * (h - 6):.1f}" for i, v in enumerate(vals))
+    lx = w - 2
+    ly = h - 3 - (vals[-1] - lo) / rng * (h - 6)
+    return (f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" '
+            f'preserveAspectRatio="none" style="display:block;margin-top:10px">'
+            f'<polyline points="{pts}" fill="none" stroke="{color}" '
+            f'stroke-width="1.8" stroke-linejoin="round"/>'
+            f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.6" fill="{color}"/></svg>')
+
+
+def hero_card(label: str, value: str, delta: str | None = None,
+              delta_color: str = "normal", spark=None, sub: str | None = None) -> None:
+    """The Overview's primary KPI: an outsized value + optional sparkline, so the one
+    number a CMO should leave with dominates the four-equal-tiles row it used to sit in.
+    """
+    spark_html = _sparkline_svg(spark) if spark is not None else ""
+    sub_html = (f'<div style="font-family:{SANS};font-size:0.8rem;color:{INK_SOFT};'
+                f'margin-top:0.15rem">{_html_inline(sub)}</div>') if sub else ""
+    st.markdown(
+        f'<div style="background:{PAPER};border:1px solid {GRID};border-left:3px solid '
+        f'{ACCENT};border-radius:8px;padding:1.3rem 1.5rem;height:100%">'
+        f'<div style="font-family:{SANS};font-size:0.8rem;font-weight:600;'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:{INK_SOFT};'
+        f'margin-bottom:0.4rem">{_html_inline(label)}</div>'
+        f'<div style="font-family:{SANS};font-size:2.6rem;font-weight:700;'
+        f'line-height:1.05;color:{INK};white-space:nowrap">{_html_inline(value)}</div>'
+        f'{_delta_html(delta, delta_color, size="0.9rem")}{sub_html}{spark_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def metric_card(label: str, value: str, delta: str | None = None,
                 delta_color: str = "normal", help: str | None = None) -> None:
     """Styled KPI card: border, large bold value, colored delta with arrow.
@@ -183,21 +332,7 @@ def metric_card(label: str, value: str, delta: str | None = None,
     ``delta_color``: "normal" (up=green), "inverse" (up=red, for cost metrics),
     "off" (neutral, no arrow).
     """
-    delta_html = ""
-    if delta:
-        pos = delta.startswith("+")
-        neg = delta.startswith("-")
-        if delta_color == "off":
-            color, arrow = INK_SOFT, ""
-        elif delta_color == "inverse":
-            color = POSITIVE if neg else (NEGATIVE if pos else INK_SOFT)
-            arrow = "▼ " if neg else ("▲ " if pos else "")
-        else:
-            color = POSITIVE if pos else (NEGATIVE if neg else INK_SOFT)
-            arrow = "▲ " if pos else ("▼ " if neg else "")
-        delta_html = (f'<div style="font-family:{SANS};font-size:0.82rem;'
-                      f'color:{color};margin-top:0.3rem">'
-                      f'{arrow}{_html_inline(delta)}</div>')
+    delta_html = _delta_html(delta, delta_color)
 
     esc_help = (str(help).replace("&", "&amp;").replace('"', "&quot;")
                 .replace("<", "&lt;").replace(">", "&gt;")) if help else ""
@@ -400,23 +535,32 @@ def combo_fig(x, bar_y, line_y, *, bar_name: str, line_name: str,
     ``bar_fmt``/``line_fmt`` are semantic kinds from TICKFORMAT (left axis = bars).
     """
     fig = go.Figure()
-    # bars: rounded data-ends, no border, a touch of translucency — the smoother look
+    # bars = spend/volume: neutral graphite (money is context, not a verdict — never the
+    # amber "claimed" or a RAG hue). rounded data-ends, a touch of translucency.
     fig.add_bar(x=x, y=bar_y, name=bar_name, opacity=0.95,
-                marker=dict(color=bar_color or ACCENT, cornerradius=6,
+                marker=dict(color=bar_color or SPEND, cornerradius=6,
                             line=dict(width=0)),
                 text=bar_text, textposition="outside" if bar_text is not None else None,
                 cliponaxis=False)
-    # line: smoothed spline, ringed markers so it reads cleanly over the bars
+    # line = efficiency: a quiet near-ink so the combo reads mono (graphite bar + dark
+    # line), not a borrowed-amber rainbow. ringed markers read cleanly over the bars.
     fig.add_scatter(x=x, y=line_y, name=line_name, mode="lines+markers", yaxis="y2",
-                    line=dict(color=line_color or CLAIMED, width=2.5, shape="spline",
+                    line=dict(color=line_color or EFFICIENCY, width=2.5, shape="spline",
                               smoothing=0.6),
-                    marker=dict(size=8, color=line_color or CLAIMED,
+                    marker=dict(size=8, color=line_color or EFFICIENCY,
                                 line=dict(color=PAPER, width=1.6)))
     style_fig(fig, yfmt=bar_fmt, height=height)
-    fig.update_layout(bargap=0.32)      # breathing room between bars
-    # secondary axis: quiet, no gridlines (the left axis owns the grid)
+    # a secondary axis + outside bar labels need room on the right, or tick labels clip
+    # to a bare "$" and the last bar's value is cut off (observed on Channels/Explore).
+    fig.update_layout(bargap=0.32, margin=dict(l=8, r=54, t=30, b=8))
+    # headroom so the efficiency line doesn't hug the plot ceiling (list(): line_y may be
+    # a pandas Series, whose truthiness is ambiguous — never use ``line_y or []``)
+    _lvals = [float(v) for v in list(line_y) if v is not None and v == v] \
+        if line_y is not None else []
+    _lmax = max(_lvals) if _lvals else 1.0
     fig.update_layout(yaxis2=dict(
-        overlaying="y", side="right", showgrid=False, zeroline=False, rangemode="tozero",
+        overlaying="y", side="right", showgrid=False, zeroline=False,
+        range=[0, _lmax * 1.25 or 1.0], automargin=True,
         tickformat=TICKFORMAT.get(line_fmt, line_fmt),
         tickfont=dict(size=12, color=INK_SOFT),
         title=dict(text=y2_title or line_name,
@@ -463,7 +607,10 @@ def dumbbell_fig(labels, x_from, x_to, *, from_name: str, to_name: str,
     style_fig(fig, xfmt=fmt, height=height or (110 + 44 * len(list(labels))))
     fig.update_layout(hovermode="closest")
     fig.update_yaxes(showgrid=False, tickformat=None, autorange="reversed")
-    fig.update_xaxes(showgrid=True, gridcolor=GRID)
+    # re-assert the x tickformat (this second update_xaxes would otherwise leave the axis
+    # showing raw decimals like "0 0.2 0.4" instead of the intended percentages)
+    fig.update_xaxes(showgrid=True, gridcolor=GRID,
+                     tickformat=TICKFORMAT.get(fmt, fmt))
     return fig
 
 

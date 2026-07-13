@@ -17,17 +17,31 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.dashboard import insights, mmm_view, theme  # noqa: E402
 
-st.set_page_config(page_title="Advanced Reporting — Results", layout="wide")
+st.set_page_config(page_title="Advanced Reporting — Incrementality", layout="wide")
 theme.inject_css()
 theme.nav_bar()
-st.title("Results — media mix model")
+st.title("Incrementality")
 
 run = mmm_view.load_mmm(ROOT / "outputs")
 if run is None:
-    st.info("No model run for the current dataset. The MMM needs a weekly business-KPI "
-            "series (`data/raw/business_kpi_weekly.csv` — e.g. CRM matchback); until "
-            "then the pipeline runs in descriptive mode and this page stays empty. "
-            "Run `python scripts/run_pipeline.py` once a KPI series exists.")
+    st.subheader("Not unlocked yet — this is the causal layer above the descriptive report")
+    st.markdown(
+        "The rest of this product answers **what happened** (spend, delivery, "
+        "analytics-measured outcomes). Incrementality answers **what the media actually "
+        "caused** — the question a budget decision really turns on:\n\n"
+        "- **Which channels truly drive outcomes** vs. ride on demand that would convert "
+        "anyway (the claims-vs-measured gap hints at this; a model proves it).\n"
+        "- **Where the next dollar works hardest** — response curves and diminishing "
+        "returns per channel.\n"
+        "- **How to reallocate budget** for more outcomes at the same spend, with 90% "
+        "confidence intervals so you know what's solid vs. unproven.")
+    st.info("**What it needs:** a weekly business-KPI series matched back to media — e.g. "
+            "a CRM matchback of applications (then enrollments/hires). That's exactly the "
+            "**Unlock incrementality measurement** recommendation on the Exec Summary. "
+            "Once the series exists and `python scripts/run_pipeline.py` fits the model, "
+            "the contribution waterfall, ROI intervals and response curves render here.")
+    st.caption("The model stays engine-agnostic (baseline now, Google Meridian later) and "
+               "every figure lands with a 90% interval — modeled estimates, not proof.")
     st.stop()
 
 summary, meta = run["summary"], run["meta"]
@@ -93,7 +107,8 @@ theme.action_title(
     "Dot = point ROI, bar = 90% interval. Only intervals clear of the 1.0 line are "
     "conclusive; everything else is unproven, not bad.")
 fig = go.Figure()
-fig.add_vline(x=1.0, line=dict(color=theme.CLAIMED, width=1.5, dash="dash"))
+# break-even reference line: neutral (amber now strictly means "platform-claimed")
+fig.add_vline(x=1.0, line=dict(color=theme.INK_SOFT, width=1.5, dash="dash"))
 for _, r in roi.iloc[::-1].iterrows():
     color = _v_colors[r["verdict"]]
     label = theme.channel_label(str(r["channel"]))

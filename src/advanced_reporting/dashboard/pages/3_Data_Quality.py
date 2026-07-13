@@ -24,11 +24,19 @@ history_f = ROOT / "data" / "processed" / "history.parquet"
 manifest_f = ROOT / "data" / "processed" / "history_manifest.json"
 dq_f = ROOT / "outputs" / "data_quality.md"
 
+
+def _store_hist():
+    # The unparsed-name rate is a property of ALL ad-level rows in the store (the naming
+    # decode runs at ingest across every ad source), so it's computed store-wide here —
+    # the Audiences page reports the rate for its current filter, hence a small difference.
+    return pd.read_parquet(history_f) if history_f.exists() else None
+
 # --- provenance tiles ---------------------------------------------------------------
 if manifest_f.exists():
     man = json.loads(manifest_f.read_text(encoding="utf-8"))
-    unp = (drilldown.unparsed_stats(pd.read_parquet(history_f))
-           if history_f.exists() else {"spend_rate": 0.0, "names": []})
+    _h = _store_hist()
+    unp = (drilldown.unparsed_stats(_h) if _h is not None
+           else {"spend_rate": 0.0, "names": []})
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         theme.metric_card("Pulls in store", f"{len(man.get('pulls', []))}",
@@ -44,6 +52,8 @@ if manifest_f.exists():
         theme.metric_card("Unparsed-name spend", f"{unp['spend_rate'] * 100:.0f}%",
                           help="Share of ad-level spend under names the naming convention "
                                "can't decode (reported, never guessed).")
+    st.caption("These provenance tiles are **store-wide** (every pull, all dates); the "
+               "data-quality report below is scoped to the modeled reporting window.")
     if man.get("skipped_pulls"):
         st.warning(f"{len(man['skipped_pulls'])} pull(s) skipped at consolidation "
                    "(schema mismatch or unreadable) — see the manifest below.")
@@ -59,8 +69,9 @@ else:
     st.caption("No store manifest yet — run `python scripts/ingest.py`.")
 
 # --- naming-decode quality at a glance (RAG gauges) ---------------------------------
-if history_f.exists():
-    _unp = drilldown.unparsed_stats(pd.read_parquet(history_f))
+_h = _store_hist()
+if _h is not None:
+    _unp = drilldown.unparsed_stats(_h)
     _rate, _cov = _unp["spend_rate"], 1.0 - _unp["spend_rate"]
     theme.action_title("Naming decode — quality at a glance",
                        "How much ad-level spend decodes cleanly to audiences/creatives.")
@@ -80,6 +91,10 @@ st.divider()
 
 # --- the pipeline's data-quality report ----------------------------------------------
 if dq_f.exists():
+    st.caption("A column shown at **100% missing** is **not collected** in this "
+               "engagement (e.g. web-analytics sessions or platform revenue feeds), not "
+               "data that was lost — this engagement is ad delivery + analytics-measured "
+               "outcomes.")
     st.markdown(theme._escape_math(dq_f.read_text(encoding="utf-8")))
 else:
     st.info("No data-quality report yet. Run `python scripts/run_pipeline.py` to "

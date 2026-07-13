@@ -11,6 +11,12 @@
         "--server.port", "8599"
       ],
       "port": 8599
+    },
+    {
+      "name": "report",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8601", "--directory", "outputs"],
+      "port": 8601
     }
   ]
 }

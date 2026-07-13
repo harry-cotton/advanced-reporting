@@ -24,8 +24,17 @@ theme.inject_css()
 theme.nav_bar()
 st.title("Audiences")
 st.caption("Decoded from ad-set/ad names via the naming convention. **All conversion "
-           "numbers on this page are platform-claimed** — GA4 measures outcomes at "
+           "numbers on this page are platform-claimed** — analytics measures outcomes at "
            "campaign grain, not per audience or creative.")
+
+# audience-TYPE colours: never the reserved amber/ink (every figure here is claimed, so
+# amber-for-retargeting would clash with amber-for-claimed) and never RAG red/green
+_ATYPE = {"PROSPECT": "#4E79A7", "RETARGET": "#2A9D8F"}
+
+
+def _atype_color(t: str) -> str:
+    from advanced_reporting.ingestion.naming_decode import UNPARSED as _U
+    return theme.GHOST if t == _U else _ATYPE.get(t, theme.INK_SOFT)
 
 history_f = ROOT / "data" / "processed" / "history.parquet"
 if not history_f.exists():
@@ -51,6 +60,15 @@ if aud.empty:
     st.info("No audience-decoded rows in the store yet — drop ad-set/ad-group exports "
             "in `data/inbox/` and re-ingest.")
     st.stop()
+
+# The ad-level (decoded) rows can cover a different window than the Overview's flight —
+# say so, so a reader never reconciles this page's totals against the headline period.
+_ad = hist[hist["spend"].notna() & (hist["ad_group"].fillna("") != "")]
+if not _ad.empty:
+    _alo, _ahi = pd.to_datetime(_ad["date"]).min(), pd.to_datetime(_ad["date"]).max()
+    st.caption(f"⚠ Ad-level data covers **{_alo:%d %b %Y} – {_ahi:%d %b %Y}** — a "
+               "different window than the Exec Summary flight; totals here won't tie out "
+               "to the headline period.")
 
 unp = drilldown.unparsed_stats(hist)
 known = aud[aud["audience_type"] != UNPARSED]
@@ -80,25 +98,24 @@ with _left:
         best, worst = known.iloc[0], known.iloc[-1]
         mult = worst["cost_per_claimed"] / best["cost_per_claimed"]
         theme.action_title(
-            f"{best['audience_type']} · {best['audience_detail']} converts at "
-            f"{mult:.1f}x less cost than {worst['audience_type']} · "
+            f"{best['audience_type']} · {best['audience_detail']} is {mult:.1f}× cheaper "
+            f"per claimed conversion than {worst['audience_type']} · "
             f"{worst['audience_detail']}",
             "Cost per platform-claimed conversion, cheapest first.")
     else:
         theme.action_title("Cost per platform-claimed conversion by audience")
     labels = [f"{t} · {d}" if t != UNPARSED else UNPARSED
               for t, d in zip(aud["audience_type"], aud["audience_detail"])]
-    colors = [theme.INK_SOFT if t == UNPARSED
-              else theme.ACCENT if t == "PROSPECT" else theme.CLAIMED
-              for t in aud["audience_type"]]
+    colors = [_atype_color(t) for t in aud["audience_type"]]
     fig = go.Figure(go.Bar(
         y=labels[::-1], x=aud["cost_per_claimed"][::-1], orientation="h",
         marker_color=colors[::-1],
         text=[f"${v:,.0f}" for v in aud["cost_per_claimed"]][::-1],
         textposition="outside"))
+    fig.update_xaxes(range=[0, float(aud["cost_per_claimed"].max()) * 1.18])
     theme.plotly_chart(fig, xfmt="currency",
                        height=max(400, 60 + 44 * len(aud)), legend=False)
-    st.caption("Blue = prospecting, amber = retargeting (warm audiences convert cheaper "
+    st.caption("Slate = prospecting, teal = retargeting (warm audiences convert cheaper "
                "by construction — compare within a type, not across), gray = unparsed.")
 
 with _right:
@@ -134,11 +151,15 @@ if not cre.empty:
     fig = go.Figure(go.Bar(
         y=[f"{c} · {f}" for c, f in zip(cre["creative"], cre["creative_format"])][::-1],
         x=cre["cost_per_claimed"][::-1], orientation="h",
-        marker_color=[theme.MEASURED if f == "VID" else theme.ACCENT
+        # distinct hues per format (the old MEASURED/ACCENT were the same ink) — and not
+        # the reserved amber/ink, since these are platform-claimed figures
+        marker_color=[("#2A9D8F" if f == "VID" else "#9C6BA3")
                       for f in cre["creative_format"]][::-1],
         text=[f"${v:,.0f}" for v in cre["cost_per_claimed"]][::-1],
         textposition="outside"))
+    fig.update_xaxes(range=[0, float(cre["cost_per_claimed"].max()) * 1.18])
     theme.plotly_chart(fig, xfmt="currency", height=80 + 40 * len(cre), legend=False)
+    st.caption("Teal = video, plum = static/other. All figures platform-claimed.")
 
 # --- trend for the top audiences --------------------------------------------------------
 tr = drilldown.audience_weekly(hist)
