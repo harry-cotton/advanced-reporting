@@ -13,6 +13,7 @@ The artifact carries a front-matter stamp and the dashboard shows it only when
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from ..dashboard.mmm_view import (cost_per_outcome_intervals, is_count_target,
 from ..llm import call
 from ..utils import load_config, load_pipeline_stages, project_root, scope_to_sources
 from . import guards, knowledge, summaries
-from .recommendations import MAX_RECS, eligible_recommendations
+from .recommendations import MAX_RECS, REC_TITLES, eligible_recommendations
 from .spec_agent import DEFAULT_MODEL, load_active_spec
 
 COMMENTARY_PATH = Path("outputs/commentary_ai.md")
@@ -247,13 +248,28 @@ def _schema(eligible: list[dict]) -> dict:
             "required": required, "properties": props}
 
 
+_UESC = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _normalize_text(s: str) -> str:
+    """Decode literal ``\\uXXXX`` sequences the model sometimes writes INSIDE its JSON
+    strings (double-escaped em dashes rendered as raw ``\\u2014`` on the dashboard —
+    live finding 2026-07-13)."""
+    return _UESC.sub(lambda m: chr(int(m.group(1), 16)), str(s))
+
+
 def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
     """Deterministic markdown rendering of the structured reply. Returns
     ``(body, dropped)`` — recommendations whose type somehow isn't eligible are
     dropped and recorded (belt over the schema's braces)."""
     eligible_types = {r["type"] for r in eligible}
-    parts = [str(data.get("lede", "")).strip()]
+    parts = [_normalize_text(data.get("lede", "")).strip()]
     sections = list(data.get("sections") or [])
+    # a recap section under any name duplicates the lede AND crowds a real section
+    # past the cap (the model has tried "Overview", then "Headline performance")
+    _recap = re.compile(r"overview|summary|headline|at a glance", re.IGNORECASE)
+    recap_dropped = [s for s in sections if _recap.search(str(s.get("title", "")))]
+    sections = [s for s in sections if s not in recap_dropped]
     # cap = one section per catalog block + scorecard + MMM (the old 6 silently
     # dropped the recruiting-pipeline section once the catalog grew to 6 blocks)
     _max_sections = 8
@@ -263,8 +279,11 @@ def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
     else:
         dropped_sections = 0
     for s in sections:
-        parts.append(f"## {s.get('title', '').strip()}\n\n{s.get('text', '').strip()}")
+        parts.append(f"## {_normalize_text(s.get('title', '')).strip()}\n\n"
+                     f"{_normalize_text(s.get('text', '')).strip()}")
     dropped: list[str] = []
+    if recap_dropped:
+        dropped.append(f"{len(recap_dropped)} recap section(s) (duplicate of the lede)")
     if dropped_sections:
         dropped.append(f"{dropped_sections} section(s) over the {_max_sections}-section cap")
     all_recs = list(data.get("recommendations") or [])
@@ -279,7 +298,11 @@ def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
             continue
         grade = r.get("evidence_grade")
         grade = grade if grade in _GRADES else "platform-claimed"
-        recs.append(f"- **{r['type']}** _({grade})_ — {str(r.get('text', '')).strip()}")
+        # plain-English title, never the raw enum ("cut_or_restructure" on a client
+        # screen reads as internal jargon)
+        title = REC_TITLES.get(r["type"], r["type"].replace("_", " ").capitalize())
+        recs.append(f"- **{title}** _({grade})_ — "
+                    f"{_normalize_text(r.get('text', '')).strip()}")
     if recs:
         parts.append("## Recommendations\n\n"
                      "Ordered by money at stake; max "

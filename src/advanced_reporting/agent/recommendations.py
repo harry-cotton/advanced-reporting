@@ -19,6 +19,19 @@ from ..dashboard.insights import _money, _paid_channels, channel_label
 
 MAX_RECS = 3          # recommendation_menu.md: max 3 per report, by money at stake
 
+# Plain-English display titles for the menu's enum keys — shared by every renderer
+# (dashboard AI block, HTML report "What we'd do next") so a client never reads a
+# raw enum like "cut_or_restructure".
+REC_TITLES = {
+    "unlock_mmm": "Unlock incrementality measurement",
+    "investigate_tracking": "Investigate conversion tracking",
+    "fix_naming": "Adopt the naming convention on unparsed ad sets",
+    "shift_within_type": "Shift budget to the cheaper audience (same type)",
+    "scale_with_test": "Scale the top channel with a controlled test",
+    "cut_or_restructure": "Restructure the underperforming channel",
+    "rebalance_channel_budget": "Rebalance channel budget",
+}
+
 # conversion_types.md starting tripwires (monitor & tighten per client)
 CLAIM_RATIO_LOW = 0.9
 CLAIM_RATIO_HIGH = 3.5

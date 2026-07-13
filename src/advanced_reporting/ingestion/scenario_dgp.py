@@ -428,8 +428,14 @@ def _build_media(spec, weeks, geos, geo_codes, init_codes, init_share, spend_gri
         _apply_unparsed_tail(media, tail_channels, tail_share, tail_names, rng)
 
     media["conversions"] = media["conversions"].round(1)
+    # STOCHASTIC rounding, not .round(): sparse-grain channels put fractional expected
+    # counts on every (week x geo x entity) row, and deterministic rounding silently
+    # deletes them wholesale (live finding 2026-07-13: LinkedIn emitted 55k sessions and
+    # ZERO key events; every channel's claim ratio drifted far above its designed value
+    # because key_events lost mass row-by-row). floor + seeded Bernoulli(frac) keeps
+    # every total right in expectation while still emitting integer counts.
     for c in ("impressions", "clicks", "sessions", "engaged_sessions", "key_events", "video_views"):
-        media[c] = media[c].round().clip(lower=0)
+        media[c] = _stoch_round(media[c].to_numpy(), rng)
     media["spend"] = media["spend"].round(2)
     media = media[media["spend"] > 0].reset_index(drop=True)
 
@@ -442,6 +448,17 @@ def _build_media(spec, weeks, geos, geo_codes, init_codes, init_share, spend_gri
         nonpaid[col] = (nonpaid[col] * np_scale).round()
     media = pd.concat([media, nonpaid], ignore_index=True)
     return media
+
+
+def _stoch_round(x, rng) -> np.ndarray:
+    """Integer counts that preserve totals in expectation: floor + Bernoulli(frac).
+
+    Deterministic ``.round()`` biases small per-row expectations to zero (0.4 always
+    rounds down), which deletes real volume when a channel's counts are spread across
+    many sparse rows. Seeded ``rng`` keeps generation deterministic."""
+    x = np.maximum(np.asarray(x, dtype=float), 0.0)
+    fl = np.floor(x)
+    return fl + (rng.random(x.shape) < (x - fl))
 
 
 def _apply_unparsed_tail(media, tail_channels, tail_share, tail_names, rng) -> None:

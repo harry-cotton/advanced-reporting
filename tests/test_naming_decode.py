@@ -186,3 +186,15 @@ def test_crosswalk_overrides_take_precedence():
     assert nd.decode_fields("Advantage+ broad TEST", overrides=ov)["audience_type"] == nd.UNPARSED
     # grammar still wins for conforming names when no override matches
     assert nd.decode_fields("PROSPECT_LAL-1PCT_FEED", overrides=ov)["audience_type"] == "PROSPECT"
+
+
+def test_lowercase_legacy_names_stay_unparsed():
+    """Grammar tokens are generator-uppercased; a lowercase 2-token legacy name must
+    not decode into a fake audience (live finding: 'cyber_evergreen' rendered as a
+    'cyber · evergreen' audience on the Audiences page)."""
+    d = nd.decode_name("cyber_evergreen")
+    assert d.kind == "unparsed" and d.audience_type == nd.UNPARSED
+    # mixed case is equally non-conforming
+    assert nd.decode_name("Prospect_Lal-1pct").kind == "unparsed"
+    # the real grammar still decodes
+    assert nd.decode_name("PROSPECT_LAL-1PCT_FEED").kind == "ad_set"

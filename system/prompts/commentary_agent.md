@@ -20,8 +20,9 @@ ELIGIBLE RECOMMENDATIONS (computed candidates; each cites its own evidence):
 {eligible_recommendations}
 
 ## Your job
-1. A 2–3 sentence executive lede. Do NOT also write an "Overview"/"Summary"
-   section — the lede already serves that role.
+1. A 2–3 sentence executive lede. Do NOT also write a recap section under ANY
+   name ("Overview", "Summary", "Headline performance", "At a glance", …) — the
+   lede is the only summary; the renderer deletes recap sections.
 2. One short paragraph per insight block, weaving the FACTS into plain English.
 3. If FACTS.mmm exists, one short "Incrementality (modeled)" paragraph: which
    channels the model grades strong / cut-candidate / unproven against the client

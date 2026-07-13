@@ -60,12 +60,15 @@ def _to_daily(weekly: pd.DataFrame, rng) -> pd.DataFrame:
     for col in _ADDITIVE:
         if col in base.columns:
             base[col] = base[col].to_numpy() * flat
-    # round counts; keep spend to cents
+    # stochastic rounding for counts (floor + seeded Bernoulli(frac)); keep spend to
+    # cents. Deterministic .round() here re-deleted the small per-day counts that
+    # survived the weekly grain — a daily key_events expectation of 0.3 must emit a 1
+    # roughly 3 days in 10, not never (live finding 2026-07-13).
     base["spend"] = base["spend"].round(2)
     for c in ("impressions", "clicks", "sessions", "engaged_sessions", "key_events",
               "conversions", "video_views"):
         if c in base.columns:
-            base[c] = base[c].round().astype(int)
+            base[c] = scenario_dgp._stoch_round(base[c].to_numpy(), rng).astype(int)
     return base
 
 
@@ -158,15 +161,24 @@ def write_ga4(daily, out: Path) -> None:
             "social_organic": "social / organic"}
     g = daily[daily["key_events"].notna()].copy()
     g = g[g["sessions"] > 0]
+    # GA4 traffic-acquisition exports are AGGREGATED at the dimension grain: one row
+    # per (date, source/medium, campaign, region). Emitting one row per underlying
+    # ad-entity row created duplicate dimension keys, and the store's grain dedup
+    # (keep-latest) silently discarded all but one — LinkedIn lost ~half its sessions
+    # and key events between export and store (live finding 2026-07-13).
+    g["campaign"] = g["campaign"].where(g["campaign"] != "(organic)", "(not set)")
+    agg = (g.assign(Date=g["date"].dt.strftime("%Y%m%d"))
+             .groupby(["Date", "channel", "campaign", "geo"], as_index=False)
+             [["sessions", "engaged_sessions", "key_events"]].sum())
     df = pd.DataFrame({
-        "Date": g["date"].dt.strftime("%Y%m%d"),
-        "Session source / medium": g["channel"].map(smap),
-        "Session campaign": g["campaign"].where(g["campaign"] != "(organic)", "(not set)"),
-        "Region": g["geo"],
-        "Sessions": g["sessions"].astype(int),
-        "Engaged sessions": g["engaged_sessions"].astype(int),
-        "Key events": g["key_events"].astype(int),
-        "Views": (g["sessions"] * 3).astype(int),
+        "Date": agg["Date"],
+        "Session source / medium": agg["channel"].map(smap),
+        "Session campaign": agg["campaign"],
+        "Region": agg["geo"],
+        "Sessions": agg["sessions"].astype(int),
+        "Engaged sessions": agg["engaged_sessions"].astype(int),
+        "Key events": agg["key_events"].astype(int),
+        "Views": (agg["sessions"] * 3).astype(int),
     }).sort_values(["Date", "Session source / medium", "Session campaign", "Region"])
     preamble = ("# All Users\n# Traffic acquisition: Session source/medium\n"
                 f"# {g['date'].min():%Y%m%d}-{g['date'].max():%Y%m%d}\n")

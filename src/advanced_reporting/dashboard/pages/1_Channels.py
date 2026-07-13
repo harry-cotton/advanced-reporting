@@ -65,6 +65,12 @@ if weekly.empty:
 _measured = "key_events" in weekly.columns and weekly["key_events"].notna().any()
 _out_col = "key_events" if _measured else "conversions"
 _out_label = KPI.capitalize() if _measured else "Claimed conv."
+# non-paid rows contribute outcomes here (unlike the Exec hero, which is paid-only) —
+# say so, or the two pages read as contradicting totals (74k paid vs 162k all-traffic)
+_nonpaid_out = weekly[~weekly["channel"].isin(insights._paid_channels(weekly))]
+if (_measured and "key_events" in _nonpaid_out.columns
+        and float(_nonpaid_out["key_events"].fillna(0).sum()) > 0):
+    _out_label += " (all traffic)"
 
 
 def _compact(n: float) -> str:
@@ -152,7 +158,7 @@ theme.combo(mo["month"], mo["spend"], mo["cpc"], bar_name="Spend", line_name="CP
             bar_fmt="currency", line_fmt="$,.2f", y2_title="CPC", height=320)
 
 # --- efficiency view (paired bars: rank on the left, spend context on the right) ------
-eff = insights.cost_per_outcome_insight(weekly)
+eff = insights.cost_per_outcome_insight(weekly, KPI)
 if eff:
     theme.action_title(eff["title"])
     per = eff["per_channel"].sort_values("cost_per")     # cheapest first, both panels

@@ -79,7 +79,10 @@ def decode_name(name) -> DecodedName:
         if is_ad:
             fmt = tokens[1] if tokens[1].upper() in _FORMATS else ""
             return DecodedName("ad", creative=tokens[0], creative_format=fmt)
-        if len(tokens) <= 3:     # audience_type _ audience_detail [_ placement]
+        # audience_type _ audience_detail [_ placement] — grammar tokens are UPPERCASE
+        # (the generator uppercases its vocab), so a lowercase 2-token legacy name like
+        # "cyber_evergreen" must land in (unparsed), not decode into a fake audience.
+        if len(tokens) <= 3 and all(t == t.upper() for t in tokens):
             return DecodedName("ad_set", audience_type=tokens[0],
                                audience_detail=tokens[1],
                                placement=tokens[2] if len(tokens) == 3 else "")

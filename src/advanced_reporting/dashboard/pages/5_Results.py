@@ -123,10 +123,11 @@ if is_count:
                  "unproven": theme.INK_SOFT}
     good, warn = float(cpo["good"].iloc[0]), float(cpo["warn"].iloc[0])
     n_strong = int((cpo["verdict"] == "strong").sum())
+    _kpi_one = kpi_label[:-1] if kpi_label.endswith("s") else kpi_label
     theme.action_title(
-        f"{n_strong} of {len(cpo)} channels beat the ${good:,.0f} cost-per-{kpi_label} "
-        "target with statistical confidence",
-        f"Dot = modeled cost per incremental {kpi_label}, bar = 90% interval. Graded "
+        f"{n_strong} of {len(cpo)} channels beat the ${good:,.0f} cost per incremental "
+        f"{_kpi_one} target with statistical confidence",
+        f"Dot = modeled cost per incremental {_kpi_one}, bar = 90% interval. Graded "
         f"against the client band (good ≤ ${good:,.0f}, watch ≤ ${warn:,.0f}); an "
         "interval reaching off the chart = the model can't rule out zero effect (unproven).")
     x_cap = warn * 2.5                          # clip 'infinite' worst-cases so the axis reads

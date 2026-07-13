@@ -177,8 +177,12 @@ def headline_tiles(weekly: pd.DataFrame, kpi_label: str = "key events") -> list[
     if ("sessions" in weekly.columns and weekly["sessions"].notna().any()
             and float(weekly["sessions"].fillna(0).sum()) > 0):
         sess_w = weekly.groupby("date")["sessions"].sum(min_count=1).sort_index()
+        sess_n = float(sess_w.sum())
+        # compact form for the big supporting count ("6.57M", matching $37.50M) — the
+        # hero outcome keeps full precision, context tiles don't need 7 digits
+        sess_str = f"{sess_n / 1e6:.2f}M" if sess_n >= 1e6 else f"{sess_n:,.0f}"
         tiles.append({
-            "label": "Sessions", "value": f"{float(sess_w.sum()):,.0f}",
+            "label": "Sessions", "value": sess_str,
             "delta": _delta(sess_w), "delta_color": "normal",
             "help": "Site sessions (all traffic, incl. organic and direct)."})
     return tiles
@@ -513,22 +517,33 @@ def pacing_insight(weekly: pd.DataFrame, budget: dict | None = None) -> dict | N
         pct_spent = total_spend / total_budget
         pct_elapsed = min(n_weeks / flight_weeks, 1.0)
         gap = pct_spent - pct_elapsed
+        complete = n_weeks >= flight_weeks
         if abs(gap) < 0.05:
             phrase, verdict = "on plan", "on_plan"
         else:
             phrase = (f"{abs(gap) * 100:.0f} points {'ahead of' if gap > 0 else 'behind'} "
                       "plan")
             verdict = "ahead" if gap > 0 else "behind"
-        title = f"Spend is pacing {phrase}"
-        narrative = (
-            f"**{_money(total_spend)}** of the **{_money(total_budget)}** budget is spent "
-            f"(**{pct_spent * 100:.0f}%**) with **{pct_elapsed * 100:.0f}%** of the "
-            f"{flight_weeks}-week flight elapsed. The current run rate is "
-            f"{_money(run_rate)}/week; at that pace the budget lands at "
-            f"{_money(run_rate * flight_weeks)} over the full flight.")
+        if complete:
+            # a finished flight gets a CLOSE-OUT read — projecting a run rate over a
+            # flight that already ended manufactures a phantom over/under-spend
+            title = f"The flight closed {phrase}"
+            narrative = (
+                f"The {flight_weeks}-week flight is complete: spend closed at "
+                f"**{_money(total_spend)}** against the **{_money(total_budget)}** plan "
+                f"(**{pct_spent * 100:.0f}%**). The final four weeks ran at "
+                f"{_money(run_rate)}/week.")
+        else:
+            title = f"Spend is pacing {phrase}"
+            narrative = (
+                f"**{_money(total_spend)}** of the **{_money(total_budget)}** budget is spent "
+                f"(**{pct_spent * 100:.0f}%**) with **{pct_elapsed * 100:.0f}%** of the "
+                f"{flight_weeks}-week flight elapsed. The current run rate is "
+                f"{_money(run_rate)}/week; at that pace the budget lands at "
+                f"{_money(run_rate * flight_weeks)} over the full flight.")
         out.update({"budget": {"total": total_budget, "flight_weeks": flight_weeks,
                                "pct_spent": pct_spent, "pct_elapsed": pct_elapsed,
-                               "verdict": verdict}})
+                               "verdict": verdict, "complete": complete}})
     else:
         title = (f"Spend is running at {_money(run_rate)}/week — "
                  f"{_money(total_spend)} over {n_weeks} weeks")

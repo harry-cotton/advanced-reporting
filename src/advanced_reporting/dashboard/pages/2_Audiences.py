@@ -94,13 +94,18 @@ else:
 # --- cost ranking + spend share side by side ----------------------------------------
 _left, _right = st.columns([1, 1])
 with _left:
-    if len(known) >= 2:
-        best, worst = known.iloc[0], known.iloc[-1]
+    # The headline comparison stays WITHIN one audience type — a cross-type "LAL beats
+    # SITE-90D" claim is exactly the warm-vs-cold misread the caption below warns about.
+    # Take the type with the widest within-type spread (same rule as the Exec block).
+    _grps = [g for _, g in known.groupby("audience_type", sort=False) if len(g) >= 2]
+    if _grps:
+        _g = max(_grps, key=lambda g: (g["cost_per_claimed"].iloc[-1]
+                                       / g["cost_per_claimed"].iloc[0]))
+        best, worst = _g.iloc[0], _g.iloc[-1]
         mult = worst["cost_per_claimed"] / best["cost_per_claimed"]
         theme.action_title(
-            f"{best['audience_type']} · {best['audience_detail']} is {mult:.1f}× cheaper "
-            f"per claimed conversion than {worst['audience_type']} · "
-            f"{worst['audience_detail']}",
+            f"Among {best['audience_type']} audiences, {best['audience_detail']} is "
+            f"{mult:.1f}× cheaper per claimed conversion than {worst['audience_detail']}",
             "Cost per platform-claimed conversion, cheapest first.")
     else:
         theme.action_title("Cost per platform-claimed conversion by audience")
@@ -168,11 +173,14 @@ if not tr.empty:
     theme.action_title(
         f"{tots.index[0]} drives the most claimed conversions week after week",
         "Weekly platform-claimed conversions, top audiences by spend.")
+    # stable muted hues (never the amber/ink honesty pair or RAG saturations) — the
+    # plotly default rainbow is off-palette for the house style
+    _line_colors = ["#4E79A7", "#B0623A", "#2A9D8F", "#9C6BA3", "#6B8E23", "#B8860B"]
     fig = go.Figure()
     for i, a in enumerate(tots.index):
         g = tr[tr["audience"] == a]
         fig.add_scatter(x=g["date"], y=g["conversions"], name=a, mode="lines",
-                        line=dict(width=2))
+                        line=dict(width=2, color=_line_colors[i % len(_line_colors)]))
     theme.plotly_chart(fig, yfmt="count", height=340)
 
 # --- the full table ---------------------------------------------------------------------
