@@ -121,6 +121,37 @@ def load_mappings(path: str | Path | None = None) -> dict:
     return out
 
 
+def load_pipeline_stages(cfg: dict | None = None, root: Path | None = None):
+    """Weekly CRM applicant-pipeline stage counts (post-submission gates), or None.
+
+    Reads the CSV at ``data.pipeline_stages_path`` (calendar-week counts by
+    ``date x geo x initiative x stage`` + a last-touch ``channel`` column, i.e. an
+    ATS/CRM export shape). Channels are standardized through the mappings aliases.
+    Returns None when the key is unset, the file is absent, or required columns are
+    missing — every consumer degrades to "no pipeline block".
+
+    These stages are selection-driven and lag media by months: they are REPORTING
+    data only, never a modeling target or input (the MMM boundary).
+    """
+    cfg = cfg if cfg is not None else load_config()
+    rel = ((cfg or {}).get("data") or {}).get("pipeline_stages_path")
+    if not rel:
+        return None
+    root = root or project_root()
+    p = Path(rel) if Path(rel).is_absolute() else root / rel
+    if not p.exists():
+        return None
+    import pandas as pd
+    df = pd.read_csv(p, parse_dates=["date"])
+    if not {"date", "stage", "count"}.issubset(df.columns):
+        return None
+    if "channel" in df.columns:
+        aliases = load_mappings().get("channel_aliases") or {}
+        df["channel"] = standardize_channels(df["channel"], aliases)
+    df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0.0)
+    return df
+
+
 def load_naming_overrides(path: str | Path | None = None) -> dict:
     """Load the naming crosswalk (``config/naming_overrides.yaml``): raw ad-set/creative
     name -> decoded fields, the analyst's curated fix for names that don't follow the

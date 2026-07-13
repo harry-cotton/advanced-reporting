@@ -14,8 +14,10 @@ CAMPAIGN_TYPES = ("awareness", "engagement", "conversion")
 
 # The fixed insight-block catalog: the Overview's deterministic renderers, by name,
 # in their default order. The spec may select and reorder; it can never add.
+# recruiting_pipeline renders only when the engagement carries CRM pipeline-stage
+# data (data.pipeline_stages_path) — selecting it elsewhere degrades to nothing.
 BLOCK_CATALOG = ("kpi_trend", "claims_vs_measured", "cost_per_outcome",
-                 "audience_callout", "pacing")
+                 "audience_callout", "recruiting_pipeline", "pacing")
 
 MAX_WATCH_FLAGS = 3
 _MAX_LABEL = 60

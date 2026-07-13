@@ -118,12 +118,74 @@ def _shift_within_type(hist: pd.DataFrame | None) -> list[dict]:
     return out
 
 
+def _headroom(curves: dict, ch: str) -> tuple[float, float] | None:
+    """(mean_weekly_spend, curve_midpoint) when spend sits below the response-curve
+    midpoint — the shared 'room to scale' heuristic; None otherwise."""
+    curve = curves.get(ch) or {}
+    spend_grid = curve.get("spend") or []
+    mean_spend = curve.get("mean_spend")
+    if mean_spend is None or not spend_grid:
+        return None
+    midpoint = max(spend_grid) / 2
+    return (float(mean_spend), midpoint) if float(mean_spend) < midpoint else None
+
+
+def _mmm_recs_count(mmm: dict) -> list[dict]:
+    """Count-target verdicts: grade COST PER INCREMENTAL OUTCOME against the client
+    band — never ROI-vs-1.0, which every count channel fails by construction
+    (apps/$ ≈ 0.005; the P3 verdict decision)."""
+    from ..dashboard.mmm_view import cost_per_outcome_intervals, response_curves
+    meta = mmm.get("meta") or {}
+    cpo = cost_per_outcome_intervals(mmm["summary"], meta)
+    curves = response_curves(meta)
+    good, warn = float(cpo["good"].iloc[0]), float(cpo["warn"].iloc[0])
+    out = []
+    for _, r in cpo.iterrows():
+        ch = str(r["channel"])
+        if r["verdict"] == "cut_candidate":       # finite interval, entirely above warn
+            ev = {"channel": ch,
+                  "cost_per_incremental_outcome": _money(float(r["cost_per"])),
+                  "cost_interval_90": f"{_money(float(r['cost_low']))}-"
+                                      f"{_money(float(r['cost_high']))}",
+                  "client_band": f"good <= {_money(good)}, watch <= {_money(warn)}"}
+            out.append(_rec(
+                "cut_or_restructure", "modeled", ev,
+                f"{channel_label(ch)} costs {_money(float(r['cost_per']))} per "
+                f"incremental outcome ({_money(float(r['cost_low']))}-"
+                f"{_money(float(r['cost_high']))}, 90% interval) — even the best case "
+                f"sits above the client's {_money(warn)} watch line at current spend."))
+        elif r["verdict"] == "strong":            # whole interval beats the good band
+            head = _headroom(curves, ch)
+            if head is None:
+                continue
+            mean_spend, midpoint = head
+            ev = {"channel": ch,
+                  "cost_per_incremental_outcome": _money(float(r["cost_per"])),
+                  "cost_interval_90": f"{_money(float(r['cost_low']))}-"
+                                      f"{_money(float(r['cost_high']))}",
+                  "client_band": f"good <= {_money(good)}, watch <= {_money(warn)}",
+                  "mean_weekly_spend": _money(mean_spend),
+                  "saturation_midpoint": _money(midpoint)}
+            out.append(_rec(
+                "scale_with_test", "modeled", ev,
+                f"{channel_label(ch)} delivers an incremental outcome for "
+                f"{_money(float(r['cost_per']))} ({_money(float(r['cost_low']))}-"
+                f"{_money(float(r['cost_high']))}, 90% interval) — beating the "
+                f"{_money(good)} good band even in the worst case — and spend "
+                f"({_money(mean_spend)}/wk) sits below the response-curve midpoint "
+                f"({_money(midpoint)}): headroom worth a controlled test."))
+        # unproven (spans the band, or the model can't rule out zero effect): no rec.
+    return out
+
+
 def _mmm_recs(mmm: dict | None) -> list[dict]:
     """scale_with_test / cut_or_restructure from the persisted MMMResult; modeled
     evidence, hedged by construction (whole-interval conditions only)."""
     if not mmm:
         return []
-    from ..dashboard.mmm_view import response_curves, roi_intervals
+    from ..dashboard.mmm_view import is_count_target, response_curves, roi_intervals
+    if is_count_target(mmm.get("meta") or {}):
+        return _mmm_recs_count(mmm)
     out = []
     intervals = roi_intervals(mmm["summary"])
     curves = response_curves(mmm.get("meta") or {})

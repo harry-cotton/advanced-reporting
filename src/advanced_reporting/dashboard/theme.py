@@ -71,9 +71,14 @@ CHANNEL_COLORS = {
     "linkedin": "#4A90B8",
     "tiktok": "#3A3A3A",
     "display": "#2A9D8F",       # teal
-    "email": "#4E79A7",         # slate blue
+    "ctv": "#5E6FA3",           # indigo (distinct from meta's violet)
+    "audio": "#77803B",         # olive
+    "jobboards": "#8C6D3F",     # bronze (muted — never the claimed amber)
     "youtube": "#C15C4E",       # terracotta
+    # non-paid rows keep quiet gray-family hues so paid identities carry the charts
+    "email": "#9C93A8",         # gray-lavender (was slate blue — clashed w/ google_search)
     "organic_search": "#8A8F98",
+    "social_organic": "#7E8A80",  # green-gray
     "direct": "#B9B2A6",
 }
 # Deterministic fallback ramp for unmapped channels — picked by a stable hash of the

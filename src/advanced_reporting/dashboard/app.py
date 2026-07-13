@@ -53,6 +53,13 @@ def _parse_lens_cached(text: str) -> L.ReportSpec:
     return L.parse_lens(text, use_llm=False)
 
 
+@st.cache_data
+def _load_stages(mtime: float | None) -> pd.DataFrame | None:
+    """CRM applicant-pipeline stage counts (post-submission gates), or None."""
+    from advanced_reporting.utils import load_pipeline_stages
+    return load_pipeline_stages(load_config(), ROOT)
+
+
 from advanced_reporting.utils import scope_to_sources  # noqa: E402
 
 weekly_all = _load_weekly(str(metrics_f), metrics_f.stat().st_mtime)
@@ -62,6 +69,10 @@ cfg = load_config()
 # mixed store (synthetic + client drops) can't leak other sources into this report
 hist_all = scope_to_sources(hist_all, cfg)
 rep = cfg.get("reporting", {}) or {}
+_stages_rel = (cfg.get("data") or {}).get("pipeline_stages_path")
+_stages_f = (ROOT / _stages_rel) if _stages_rel else None
+_stages_df = _load_stages(_stages_f.stat().st_mtime
+                          if _stages_f is not None and _stages_f.exists() else None)
 # The report spec (outputs/report_spec.json, written by scripts/advise.py --spec)
 # fills the gaps config leaves; explicit config keys always win. No spec -> {}.
 spec, spec_note = load_active_spec(ROOT)
@@ -497,6 +508,31 @@ def _block_audience_callout() -> None:
             theme.prose(b["narrative"])
         st.divider()
 
+def _block_recruiting_pipeline() -> None:
+    # CRM applicant gates (post-submission). Deliberately NOT scoped by the sidebar
+    # date/channel filters: stage completions lag media by months, so slicing them to
+    # the media window would misread as a collapse. Full engagement, always.
+    b = insights.recruiting_pipeline_insight(_stages_df)
+    if not b:
+        return
+    with _narrow():
+        theme.action_title(b["title"],
+                           "Full engagement to date — not affected by the sidebar "
+                           "filters (stage completions lag media by months).")
+        df = b["stages"]
+        labels = list(df["label"])
+        text = [f"{v:,.0f}" + (f"  ·  {r * 100:.0f}% of prior gate" if r == r else "")
+                for v, r in zip(df["value"], df["step_rate"])]
+        fig = go.Figure(go.Bar(
+            y=labels[::-1], x=df["value"].tolist()[::-1], orientation="h",
+            marker_color=theme.MEASURED, text=text[::-1], textposition="outside"))
+        fig.update_xaxes(range=[0, float(df["value"].max()) * 1.3])
+        theme.plotly_chart(fig, xfmt="count", height=80 + 46 * len(df), legend=False)
+        st.caption(b["censor_note"])
+        theme.prose(b["narrative"])
+    st.divider()
+
+
 def _block_pacing() -> None:
     b = insights.pacing_insight(weekly, budget_cfg)
     if not b:
@@ -543,6 +579,7 @@ _BLOCK_RENDERERS = {
     "claims_vs_measured": _block_claims_vs_measured,
     "cost_per_outcome": _block_cost_per_outcome,
     "audience_callout": _block_audience_callout,
+    "recruiting_pipeline": _block_recruiting_pipeline,
     "pacing": _block_pacing,
 }
 assert set(_BLOCK_RENDERERS) == set(BLOCK_CATALOG), \

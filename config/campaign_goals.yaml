@@ -20,6 +20,12 @@ overrides:
   retargeting: conversion
   tiktok_awareness: awareness
   linkedin_abm: consideration
+  # The naming grammar's OBJECTIVE segment (US_META_CONVERT_PROSPECT_SA): overrides
+  # beat inference, so the stated objective wins over audience tokens like PROSPECT
+  # (which would otherwise infer "awareness" for every prospecting conversion campaign).
+  awareness: awareness
+  consider: consideration
+  convert: conversion
 
 # fallback inference: the first goal whose any substring appears in the (lowercased)
 # campaign name wins. Used only when there is no explicit override.

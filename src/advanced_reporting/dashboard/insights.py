@@ -34,8 +34,12 @@ CHANNEL_LABELS = {
     "tiktok": "TikTok",
     "youtube": "YouTube",
     "display": "Display",
+    "ctv": "CTV",
+    "audio": "Audio",
+    "jobboards": "Job boards",
     "email": "Email",
     "organic_search": "Organic search",
+    "social_organic": "Organic social",
     "direct": "Direct",
 }
 
@@ -243,16 +247,24 @@ def _rag_gauge(value: float, higher_is_better: bool, good: float | None = None,
             "verdict": verdict, "mode": mode}
 
 
-def _outcome_relabel(key: str, label: str, kpi_label: str, measured: bool) -> str:
+def _outcome_relabel(key: str, label: str, kpi_label: str, measured: bool,
+                     blended: bool = False) -> str:
     """Relabel the outcome-tier metrics with the engagement's own KPI wording, so the
     scorecard says "Application starts" / "Cost / application start" — consistent with the
-    tiles and prose, and free of the hardcoded, wrong-here "(GA4)" vendor tag."""
+    tiles and prose, and free of the hardcoded, wrong-here "(GA4)" vendor tag.
+
+    ``blended``: the engagement has NON-PAID outcome rows, so the national metric mixes
+    organic outcomes under paid spend — a different number from the tile row's
+    paid-only cost. Say so in the label, or the two read as a contradiction ($504 paid
+    vs $232 blended, live finding 2026-07-13)."""
     if not measured:
         return label
     if key == "key_events":
-        return kpi_label.capitalize()
+        return (f"{kpi_label.capitalize()} (all traffic)" if blended
+                else kpi_label.capitalize())
     if key == "cost_per_key_event":
-        return f"Cost / {_singular(kpi_label)}"
+        return (f"Cost / {_singular(kpi_label)} (blended, all traffic)" if blended
+                else f"Cost / {_singular(kpi_label)}")
     return label
 
 
@@ -285,6 +297,11 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
     if tier == "outcome" and not measured:     # no measured series → fall back to claimed/CPA
         rag_keys = ["cpa" if k == "cost_per_key_event" else k for k in rag_keys]
         vol_keys = ["conversions" if k == "key_events" else k for k in vol_keys]
+    # non-paid rows contribute outcomes → the national ratio blends organic outcomes
+    # under paid spend; labels must say so (vs the tile row's paid-only cost)
+    nonpaid = weekly[~weekly["channel"].isin(_paid_channels(weekly))]
+    blended = bool(measured and "key_events" in nonpaid.columns
+                   and float(nonpaid["key_events"].fillna(0).sum()) > 0)
 
     def _prov(key: str, mode: str) -> str:
         if mode != "absolute":
@@ -306,7 +323,8 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
         if g is None:
             continue
         rag.append({"key": key,
-                    "label": _outcome_relabel(key, rec["label"], kpi_label, measured),
+                    "label": _outcome_relabel(key, rec["label"], kpi_label, measured,
+                                              blended=blended),
                     "value_str": _fmt(rec["value"], rec["format"]),
                     "provenance": _prov(key, g["mode"]), **g})
 
@@ -317,7 +335,8 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
         if rec is None or pd.isna(rec["value"]) or float(rec["value"]) == 0.0:
             continue                           # unpopulated column → omit, don't show "0"
         val, vstr = float(rec["value"]), _fmt(rec["value"], rec["format"])
-        rec = {**rec, "label": _outcome_relabel(key, rec["label"], kpi_label, measured)}
+        rec = {**rec, "label": _outcome_relabel(key, rec["label"], kpi_label, measured,
+                                                blended=blended)}
         goal = (targets.get(key, {}) or {}).get("goal")
         if goal and goal > 0:
             scale = max(val, float(goal))
@@ -627,6 +646,81 @@ def audience_callout_insight(hist: pd.DataFrame) -> dict | None:
         "title": title, "narrative": narrative, "per_audience": per,
         "best": best.to_dict(), "worst": worst.to_dict(), "mult": mult,
     }
+
+
+# ---------------------------------------------------------------- recruiting pipeline
+# The post-submission applicant gates, in portal-tracker order. REPORTING layer only:
+# the stages are selection-driven and lag media by months — never a modeling target.
+PIPELINE_STAGE_ORDER = ["initial_screening", "meet_greet", "testing",
+                        "conditional_offer", "background_investigation", "final_offer"]
+PIPELINE_STAGE_LABELS = {
+    "initial_screening": "Initial screening",
+    "meet_greet": "Meet & greet",
+    "testing": "Testing",
+    "conditional_offer": "Conditional offer",
+    "background_investigation": "Background investigation",
+    "final_offer": "Final offer",
+}
+
+PIPELINE_CENSOR_NOTE = ("Pipeline still maturing: final offers completing now stem "
+                        "from applications submitted ~9–12 months ago, so recent "
+                        "cohorts under-count at the later gates.")
+
+
+def recruiting_pipeline_insight(stages: pd.DataFrame | None) -> dict | None:
+    """The 6-stage post-submission applicant funnel (CRM/ATS calendar-week counts).
+
+    ``stages`` is the frame from ``utils.load_pipeline_stages`` (date, stage, count,
+    optionally geo/initiative/channel). Returns None when absent/empty — the block
+    simply doesn't render on engagements without an applicant pipeline.
+
+    Honesty rules baked in: counts are calendar-week totals (not one cohort), the
+    right-censoring is stated, and the narrative draws the MMM boundary — media buys
+    applications; it cannot pass a polygraph.
+    """
+    if stages is None or len(stages) == 0 or "stage" not in stages.columns:
+        return None
+    per = stages.groupby("stage")["count"].sum()
+    order = [s for s in PIPELINE_STAGE_ORDER if s in per.index and per[s] > 0]
+    if len(order) < 2:
+        return None
+    rows = []
+    prev_stage, prev_val = None, None
+    for s in order:
+        v = float(per[s])
+        rate = (v / prev_val) if prev_val else float("nan")
+        rows.append({"stage": s, "label": PIPELINE_STAGE_LABELS.get(s, s),
+                     "value": v, "from": prev_stage, "step_rate": rate})
+        prev_stage, prev_val = s, v
+    df = pd.DataFrame(rows)
+
+    first, last = df.iloc[0], df.iloc[-1]
+    overall = last["value"] / first["value"] if first["value"] else float("nan")
+    steps = df.dropna(subset=["step_rate"])
+    hardest = steps.loc[steps["step_rate"].idxmin()] if len(steps) else None
+
+    title = (f"Selection does the filtering: {overall * 100:.0f}% of screened "
+             f"applicants have cleared every gate to a final offer")
+    co = df.set_index("stage")["value"].get("conditional_offer")
+    co_bit = f"**{co:,.0f}** conditional offers and " if co is not None else ""
+    narrative = (
+        f"Beyond the media funnel, the CRM has recorded **{first['value']:,.0f}** "
+        f"applicants entering {first['label'].lower()}, {co_bit}"
+        f"**{last['value']:,.0f}** final offers to date. ")
+    if hardest is not None:
+        narrative += (
+            f"The steepest gate is **{hardest['label']}**, which only "
+            f"**{hardest['step_rate'] * 100:.0f}%** of "
+            f"{PIPELINE_STAGE_LABELS.get(hardest['from'], str(hardest['from'])).lower()} "
+            "candidates clear. ")
+    narrative += (
+        f"_{PIPELINE_CENSOR_NOTE} Counts are calendar-week CRM totals, so "
+        "stage-to-stage rates compare everyone clearing each gate in the window, not a "
+        "single cohort._ **Media buys applications; it cannot pass a polygraph** — these "
+        "gates are selection outcomes, reported for context and never attributed to "
+        "media.")
+    return {"title": title, "narrative": narrative, "stages": df,
+            "overall_rate": overall, "censor_note": PIPELINE_CENSOR_NOTE}
 
 
 # ---------------------------------------------------------------- macro slot (hidden)

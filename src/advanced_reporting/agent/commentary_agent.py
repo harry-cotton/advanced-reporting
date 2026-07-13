@@ -19,9 +19,10 @@ from pathlib import Path
 import pandas as pd
 
 from ..dashboard import insights
-from ..dashboard.mmm_view import load_mmm, roi_intervals
+from ..dashboard.mmm_view import (cost_per_outcome_intervals, is_count_target,
+                                  load_mmm, roi_intervals)
 from ..llm import call
-from ..utils import load_config, project_root, scope_to_sources
+from ..utils import load_config, load_pipeline_stages, project_root, scope_to_sources
 from . import guards, knowledge, summaries
 from .recommendations import MAX_RECS, eligible_recommendations
 from .spec_agent import DEFAULT_MODEL, load_active_spec
@@ -34,7 +35,7 @@ STAMP = "AI-drafted from computed facts — review before client use"
 # older logic version is treated as STALE and hidden with a re-run note — cached LLM
 # prose must never contradict the computed blocks it sits beside. (Independent of
 # ``data_hash``, which keys the spec: the data is unchanged, only the reporting logic.)
-LOGIC_VERSION = "2026-07-13-partial-weeks"
+LOGIC_VERSION = "2026-07-13-recruiting-pipeline"
 
 _GRADES = ("platform-claimed", "analytics-measured", "modeled")
 
@@ -55,14 +56,19 @@ def _records(df: pd.DataFrame, formats: dict) -> list[dict]:
 
 
 def _insight_facts(weekly: pd.DataFrame, hist: pd.DataFrame | None,
-                   kpi_label: str, budget: dict | None) -> dict:
+                   kpi_label: str, budget: dict | None,
+                   stages: pd.DataFrame | None = None) -> dict:
     money, count = insights._money, lambda v: f"{float(v):,.0f}"
     ratio = lambda v: f"{float(v):.1f}x"  # noqa: E731
     facts: dict = {}
 
     facts["headline_tiles"] = [
-        {k: t[k] for k in ("label", "value", "delta") if t.get(k) is not None}
+        {k: t[k] for k in ("label", "value", "delta", "help") if t.get(k) is not None}
         for t in insights.headline_tiles(weekly, kpi_label)]
+    facts["headline_tiles_note"] = (
+        "tile VALUES are full-period totals over PAID campaigns; deltas compare the "
+        "last 4 weeks to the prior 4. The scorecard's blended figures divide paid "
+        "spend by ALL-traffic outcomes — a different denominator; never equate them.")
 
     if b := insights.kpi_trend_insight(weekly, kpi_label):
         facts["kpi_trend"] = {"title": b["title"], "narrative": b["narrative"]}
@@ -90,6 +96,14 @@ def _insight_facts(weekly: pd.DataFrame, hist: pd.DataFrame | None,
                 "title": b["title"], "narrative": b["narrative"],
                 "gap": ratio(b["mult"]),
                 "note": "all audience figures platform-claimed"}
+    if b := insights.recruiting_pipeline_insight(stages):
+        facts["recruiting_pipeline"] = {
+            "title": b["title"], "narrative": b["narrative"],
+            "stages": _records(b["stages"], {
+                "label": str, "value": count,
+                "step_rate": lambda v: f"{float(v) * 100:.0f}%" if v == v else None}),
+            "note": ("selection outcomes, right-censored (recent cohorts still in "
+                     "flight) — never attribute these gates to media")}
     return facts
 
 
@@ -114,6 +128,34 @@ def _scorecard_facts(weekly: pd.DataFrame, tier: str, targets: dict,
 def _mmm_facts(mmm: dict | None) -> dict | None:
     if not mmm:
         return None
+    meta = mmm.get("meta") or {}
+    money = insights._money
+    if is_count_target(meta):
+        # Count target: ROI (outcomes/$) is meaningless prose — the facts the agent
+        # may cite are COST PER INCREMENTAL OUTCOME intervals vs the client band.
+        import numpy as np
+        cpo = cost_per_outcome_intervals(mmm["summary"], meta)
+        good, warn = float(cpo["good"].iloc[0]), float(cpo["warn"].iloc[0])
+        rows = []
+        for _, r in cpo.iterrows():
+            finite = np.isfinite(float(r["cost_high"]))
+            rows.append({
+                "channel": str(r["channel"]),
+                "cost_per_incremental": (money(float(r["cost_per"]))
+                                         if np.isfinite(float(r["cost_per"]))
+                                         else "not measurable"),
+                "interval_90": (f"{money(float(r['cost_low']))}-"
+                                f"{money(float(r['cost_high']))}" if finite
+                                else "cannot rule out zero incremental effect"),
+                "verdict": str(r["verdict"])})
+        return {"note": "modeled estimates with 90% intervals — directional, hedge "
+                        "causal language. Cost per INCREMENTAL outcome (the MMM "
+                        "target), graded against the client band — a different "
+                        "denominator from the descriptive cost-per figures above; "
+                        "never blend the two.",
+                "client_band": {"good": money(good), "warn": money(warn),
+                                "provenance": "client target"},
+                "cost_per_incremental_by_channel": rows}
     iv = roi_intervals(mmm["summary"])
     return {"note": "modeled estimates with 90% intervals — directional, hedge "
                     "causal language",
@@ -158,7 +200,8 @@ def build_facts(root: Path | None = None) -> tuple[dict, list[dict]] | None:
         "date_range": [str(weekly["date"].min().date()),
                        str(weekly["date"].max().date())],
         "n_paid_channels": len(insights._paid_channels(weekly)),
-        "insights": _insight_facts(weekly, hist, kpi_label, rep.get("budget")),
+        "insights": _insight_facts(weekly, hist, kpi_label, rep.get("budget"),
+                                   stages=load_pipeline_stages(cfg, root)),
         "primary_tier_scorecard": _scorecard_facts(
             weekly, tier, targets, kpi_label,
             config_target_keys=set(rep.get("targets") or {})),
@@ -211,16 +254,19 @@ def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
     eligible_types = {r["type"] for r in eligible}
     parts = [str(data.get("lede", "")).strip()]
     sections = list(data.get("sections") or [])
-    if len(sections) > 6:      # size caps live here now, not in the API schema
-        dropped_sections = len(sections) - 6
-        sections = sections[:6]
+    # cap = one section per catalog block + scorecard + MMM (the old 6 silently
+    # dropped the recruiting-pipeline section once the catalog grew to 6 blocks)
+    _max_sections = 8
+    if len(sections) > _max_sections:
+        dropped_sections = len(sections) - _max_sections
+        sections = sections[:_max_sections]
     else:
         dropped_sections = 0
     for s in sections:
         parts.append(f"## {s.get('title', '').strip()}\n\n{s.get('text', '').strip()}")
     dropped: list[str] = []
     if dropped_sections:
-        dropped.append(f"{dropped_sections} section(s) over the 6-section cap")
+        dropped.append(f"{dropped_sections} section(s) over the {_max_sections}-section cap")
     all_recs = list(data.get("recommendations") or [])
     if len(all_recs) > MAX_RECS:
         dropped.append(f"{len(all_recs) - MAX_RECS} recommendation(s) over the "
@@ -300,8 +346,10 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
             + "\nEvery numeral must appear in FACTS / ELIGIBLE RECOMMENDATIONS / "
               "CLIENT CONTEXT exactly as given. Redraft, correcting or removing "
               "the offending numbers.")
+        # 16k: the FBI-scale FACTS payload (6 insight blocks incl. the recruiting
+        # pipeline) pushed replies past the old 8k ceiling (truncated 2026-07-13)
         data, info = call(prompt + retry_note, model=model,
-                          schema=_schema(eligible), max_tokens=8000)
+                          schema=_schema(eligible), max_tokens=16000)
         if data is None:
             return None, info
         authored = "\n".join(

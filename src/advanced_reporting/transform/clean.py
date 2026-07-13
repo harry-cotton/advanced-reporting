@@ -160,6 +160,38 @@ def to_weekly_geo(df: pd.DataFrame) -> pd.DataFrame:
     return fill_calendar(weekly, ["channel", "geo"], freq="W-MON", metric_cols=cols)
 
 
+# Post-submission pipeline stages surfaced as weekly VOLUME columns. Counts only —
+# the applicant gates lag media by months, so no in-window cost-per-stage is ever
+# derived from these (a lagged denominator under today's spend would mislead).
+PIPELINE_STAGE_METRICS = {"conditional_offer": "conditional_offers",
+                          "final_offer": "final_offers"}
+
+
+def merge_pipeline_stages(weekly_long: pd.DataFrame,
+                          stages: pd.DataFrame | None) -> pd.DataFrame:
+    """Attach CRM pipeline volumes (conditional/final offers) to the weekly channel
+    table on (date, channel). ``stages`` comes from ``utils.load_pipeline_stages``
+    (channels already canonical); None / missing columns -> table returned unchanged.
+    Counts that fail to join (a channel/week absent from the media table) are warned
+    about loudly rather than silently dropped."""
+    if stages is None or len(stages) == 0 or "channel" not in stages.columns:
+        return weekly_long
+    s = stages[stages["stage"].isin(PIPELINE_STAGE_METRICS)]
+    if s.empty:
+        return weekly_long
+    pv = (s.groupby(["date", "channel", "stage"])["count"].sum()
+            .unstack("stage").rename(columns=PIPELINE_STAGE_METRICS).reset_index())
+    out = weekly_long.merge(pv, on=["date", "channel"], how="left")
+    for col in PIPELINE_STAGE_METRICS.values():
+        if col in pv.columns:
+            lost = float(pv[col].sum(skipna=True)) - float(out[col].sum(skipna=True))
+            if lost > 0.5:
+                print(f"  WARNING: {lost:,.0f} {col} did not join the weekly table "
+                      "(channel/week not present in the media data) — national totals "
+                      "will under-count")
+    return out
+
+
 def channel_metrics(weekly_long: pd.DataFrame) -> pd.DataFrame:
     """Add standard performance metrics for the dashboard."""
     d = weekly_long.copy()

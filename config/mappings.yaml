@@ -76,6 +76,7 @@ channel_aliases:
   display: display
   programmatic: display
   organic_search: organic_search
+  organic: organic_search      # bare CRM/analytics "organic" bucket -> canonical key
   direct: direct
   email: email
   social_organic: social_organic

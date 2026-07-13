@@ -32,7 +32,8 @@ from ..agent.spec_agent import load_active_spec  # noqa: E402
 from ..agent.validate import BLOCK_CATALOG  # noqa: E402
 from ..dashboard import insights, theme  # noqa: E402
 from ..dashboard.mmm_view import load_mmm  # noqa: E402
-from ..utils import load_config, project_root, scope_to_sources  # noqa: E402
+from ..utils import (load_config, load_pipeline_stages, project_root,  # noqa: E402
+                     scope_to_sources)
 
 REPORT_PATH = Path("outputs/client_report.html")
 
@@ -109,6 +110,25 @@ def _chart_trend(series: pd.DataFrame) -> str:
     _style_axes(ax)
     ax.set_xlabel("")
     return _img(_fig_to_b64(fig), "Outcome trend, paid vs organic & direct")
+
+
+def _chart_pipeline(stages: pd.DataFrame) -> str:
+    """Horizontal 6-stage applicant funnel: CRM-measured counts + pass-through."""
+    df = stages.iloc[::-1]          # first gate at the top
+    fig, ax = plt.subplots(figsize=(7.2, 0.6 + 0.5 * len(df)))
+    ax.barh(df["label"], df["value"], color=theme.MEASURED, height=0.55)
+    for i, (v, r) in enumerate(zip(df["value"], df["step_rate"])):
+        note = f"  {v:,.0f}" + (f"  ·  {r * 100:.0f}% of prior gate" if r == r else "")
+        ax.text(v, i, note, va="center", fontsize=9, color=theme.INK)
+    ax.set_xlim(0, float(df["value"].max()) * 1.45)
+    ax.xaxis.grid(True, color=theme.GRID, linewidth=0.6)
+    ax.yaxis.grid(False)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(theme.GRID)
+    ax.tick_params(colors=theme.INK_SOFT, labelsize=9)
+    ax.set_axisbelow(True)
+    return _img(_fig_to_b64(fig), "Applicant pipeline stages (CRM counts)")
 
 
 def _chart_mix(mix: pd.DataFrame) -> str:
@@ -272,6 +292,7 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
     hist_f = root / "data" / "processed" / "history.parquet"
     hist = (scope_to_sources(pd.read_parquet(hist_f), cfg)
             if hist_f.exists() else None)
+    stages = load_pipeline_stages(cfg, root)   # CRM applicant gates (may be None)
 
     rep = cfg.get("reporting") or {}
     spec, spec_note = load_active_spec(root)
@@ -321,9 +342,18 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
         mix = insights.spend_mix(weekly)
         return _section(b["title"], _chart_mix(mix) + _md_to_html(b["narrative"]))
 
+    def _b_pipeline() -> str:
+        b = insights.recruiting_pipeline_insight(stages)
+        if not b:
+            return ""
+        return _section(b["title"], _chart_pipeline(b["stages"])
+                        + _md_to_html(b["narrative"]))
+
     renderers = {"kpi_trend": _b_kpi_trend, "claims_vs_measured": _b_claims,
                  "cost_per_outcome": _b_costper, "audience_callout": _b_audience,
-                 "pacing": _b_pacing}
+                 "recruiting_pipeline": _b_pipeline, "pacing": _b_pacing}
+    assert set(renderers) == set(BLOCK_CATALOG), \
+        "html_report block renderers out of sync with agent BLOCK_CATALOG"
     blocks_html = "".join(renderers[n]() for n in (spec.get("blocks")
                                                    or BLOCK_CATALOG))
 

@@ -19,6 +19,14 @@ data:
   raw_dir: data/raw
   processed_dir: data/processed
   sample_file: data/raw/sample_campaigns.csv
+  # optional: business-KPI weekly CSV (CRM matchback) — defaults to
+  # data/raw/business_kpi_weekly.csv when unset
+  # kpi_path: "data/MMM Data/business_kpi_weekly.csv"
+  # optional: post-conversion pipeline stage counts (ATS/CRM export: week x geo x
+  # initiative x stage + last-touch channel). Reporting layer ONLY (the
+  # recruiting_pipeline block + outcome-tier volume metrics) — stages lag media by
+  # months and are never a modeling target or input.
+  # pipeline_stages_path: "data/MMM Data/crm_pipeline_stages.csv"
 
 modeling:
   engine: baseline            # "baseline" (always available) or "meridian"

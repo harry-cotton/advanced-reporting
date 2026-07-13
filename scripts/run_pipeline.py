@@ -7,12 +7,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from advanced_reporting.utils import load_config
+from advanced_reporting.utils import load_config, load_pipeline_stages
 from advanced_reporting.ingestion.csv_source import CSVSource
 from advanced_reporting.transform.clean import (
     load_history, clean_ad_data, to_weekly, to_weekly_geo, channel_metrics,
-    build_modeling_table, build_modeling_table_geo, data_quality_report,
-    data_quality_markdown)
+    merge_pipeline_stages, build_modeling_table, build_modeling_table_geo,
+    data_quality_report, data_quality_markdown)
 from advanced_reporting.mmm.factory import get_engine
 from advanced_reporting.reporting.charts import plot_all
 from advanced_reporting.reporting.commentary import generate_commentary
@@ -58,6 +58,9 @@ def run(lens=None, sources=None, no_mmm=False, engine=None):
     ad_clean, creport = clean_ad_data(ad_raw)
     weekly = to_weekly(ad_clean)                         # national (sum geos)
     weekly_geo = to_weekly_geo(ad_clean)                 # geo x weekly (long)
+    # post-submission pipeline volumes (reporting-only counts; never a model input)
+    stages = load_pipeline_stages(cfg, ROOT)
+    weekly = merge_pipeline_stages(weekly, stages)
     channel_metrics(weekly).to_csv(proc / "channel_weekly_metrics.csv", index=False)
     weekly_geo.to_csv(proc / "modeling_table_geo.csv", index=False)
 
