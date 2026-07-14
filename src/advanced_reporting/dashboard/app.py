@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.agent import load_active_spec  # noqa: E402
 from advanced_reporting.agent.commentary_agent import (  # noqa: E402
-    STAMP, load_active_commentary)
+    STAMP, load_active_commentary, load_active_commentary_sections)
 from advanced_reporting.agent.validate import BLOCK_CATALOG  # noqa: E402
 from advanced_reporting.dashboard import filters, insights, theme  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
@@ -136,6 +136,20 @@ else:
             theme.metric_card(t["label"], t["value"], delta=t["delta"],
                               delta_color=t["delta_color"], help=t.get("help"))
 st.divider()
+
+# --- the hero chart: monthly spend + cost per outcome (the "how are we doing" read) ---
+_eff = insights.spend_efficiency_trend(weekly, kpi_label)
+if _eff:
+    theme.action_title(_eff["title"],
+                       "Monthly paid spend (bars) with cost per analytics-measured "
+                       f"{insights._singular(kpi_label)} overlaid (line).")
+    _mo = _eff["monthly"]
+    theme.combo(_mo["month"], _mo["spend"], _mo["cost_per"],
+                bar_name="Spend", line_name=f"Cost / {insights._singular(kpi_label)}",
+                bar_fmt="currency", line_fmt="$,.0f", y2_title="Cost / outcome",
+                height=300)
+    st.divider()
+
 theme.lede(insights.topline_summary(weekly, kpi_label))
 
 # --- tier scorecard: Awareness / Engagement / Action goal gauges -------------------
@@ -192,13 +206,36 @@ def _narrow():
     return left
 
 
+def _stacked_monthly(scoped: pd.DataFrame, col: str, stackgroup: str) -> go.Figure:
+    """Readable stacked area for a per-channel volume: MONTHLY grain (weekly x 8
+    channels reads as noise over a 131-week flight) and at most 6 named channels —
+    the rest fold into a quiet 'Other' band."""
+    d = scoped.copy()
+    d["month"] = d["date"].dt.to_period("M").dt.to_timestamp()
+    per = d.groupby("channel")[col].sum().sort_values(ascending=False)
+    top = [c for c in per.index if per[c] > 0][:6]
+    d["bucket"] = d["channel"].where(d["channel"].isin(top), "Other")
+    ts = (d.groupby(["month", "bucket"], as_index=False)[col].sum()
+            .sort_values("month"))
+    fig = go.Figure()
+    for i, ch in enumerate(top + (["Other"] if (~d["channel"].isin(top)).any() else [])):
+        g = ts[ts["bucket"] == ch]
+        if not len(g) or float(g[col].sum()) <= 0:
+            continue
+        color = theme.GHOST if ch == "Other" else theme.channel_color(ch, i)
+        fig.add_scatter(x=g["month"], y=g[col],
+                        name="Other" if ch == "Other" else theme.channel_label(ch),
+                        mode="lines", stackgroup=stackgroup,
+                        line=dict(color=color, width=1.5))
+    return fig
+
+
 def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) -> None:
     """Dynamic 2-column block driven by the query's focus_metric."""
     fm = spec.focus_metric
     if fm is None:
         return
     scoped = wk if spec.channels is None else wk[wk["channel"].isin(spec.channels)]
-    channels = insights._paid_channels(scoped)
     per_ch = scoped.groupby("channel")
 
     _labels = {
@@ -214,14 +251,10 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
 
     if fm == "clicks":
         with left:
-            ts = scoped.groupby(["date", "channel"], as_index=False)["clicks"].sum().sort_values("date")
-            fig = go.Figure()
-            for i, ch in enumerate(channels):
-                g = ts[ts["channel"] == ch]
-                fig.add_scatter(x=g["date"], y=g["clicks"], name=theme.channel_label(ch),
-                                mode="lines", stackgroup="clicks",
-                                line=dict(color=theme.channel_color(ch, i), width=2))
-            theme.plotly_chart(fig, yfmt="count", height=300)
+            theme.plotly_chart(_stacked_monthly(scoped, "clicks", "clicks"),
+                               yfmt="count", height=300)
+            st.caption("Monthly clicks, top channels stacked (smaller channels fold "
+                       "into Other).")
         with right:
             ctr = per_ch.agg(clicks=("clicks", "sum"),
                              impressions=("impressions", "sum")).reset_index()
@@ -237,14 +270,10 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
 
     elif fm == "impressions":
         with left:
-            ts = scoped.groupby(["date", "channel"], as_index=False)["impressions"].sum().sort_values("date")
-            fig = go.Figure()
-            for i, ch in enumerate(channels):
-                g = ts[ts["channel"] == ch]
-                fig.add_scatter(x=g["date"], y=g["impressions"], name=theme.channel_label(ch),
-                                mode="lines", stackgroup="impr",
-                                line=dict(color=theme.channel_color(ch, i), width=2))
-            theme.plotly_chart(fig, yfmt="count", height=300)
+            theme.plotly_chart(_stacked_monthly(scoped, "impressions", "impr"),
+                               yfmt="count", height=300)
+            st.caption("Monthly impressions, top channels stacked (smaller channels "
+                       "fold into Other).")
         with right:
             cpm = per_ch.agg(spend=("spend", "sum"),
                              impressions=("impressions", "sum")).reset_index()
@@ -260,14 +289,10 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
 
     elif fm == "spend":
         with left:
-            ts = scoped.groupby(["date", "channel"], as_index=False)["spend"].sum().sort_values("date")
-            fig = go.Figure()
-            for i, ch in enumerate(channels):
-                g = ts[ts["channel"] == ch]
-                fig.add_scatter(x=g["date"], y=g["spend"], name=theme.channel_label(ch),
-                                mode="lines", stackgroup="spend",
-                                line=dict(color=theme.channel_color(ch, i), width=2))
-            theme.plotly_chart(fig, yfmt="currency", height=300)
+            theme.plotly_chart(_stacked_monthly(scoped, "spend", "spend"),
+                               yfmt="currency", height=300)
+            st.caption("Monthly spend, top channels stacked (smaller channels fold "
+                       "into Other).")
         with right:
             mix = insights.spend_mix(scoped)
             fig = go.Figure(go.Pie(
@@ -338,14 +363,10 @@ def _render_focus_block(spec: L.ReportSpec, wk: pd.DataFrame, kpi_label: str) ->
     elif fm == "engagement":
         if "sessions" in scoped.columns and scoped["sessions"].notna().any():
             with left:
-                ts = scoped.groupby(["date", "channel"], as_index=False)["sessions"].sum().sort_values("date")
-                fig = go.Figure()
-                for i, ch in enumerate(channels):
-                    g = ts[ts["channel"] == ch]
-                    fig.add_scatter(x=g["date"], y=g["sessions"], name=theme.channel_label(ch),
-                                    mode="lines", stackgroup="sess",
-                                    line=dict(color=theme.channel_color(ch, i), width=2))
-                theme.plotly_chart(fig, yfmt="count", height=300)
+                theme.plotly_chart(_stacked_monthly(scoped, "sessions", "sess"),
+                                   yfmt="count", height=300)
+                st.caption("Monthly sessions, top channels stacked (smaller channels "
+                           "fold into Other).")
             with right:
                 eng = per_ch.agg(sessions=("sessions", "sum"),
                                  engaged=("engaged_sessions", "sum")).reset_index()
@@ -398,6 +419,21 @@ else:
 # BLOCK_CATALOG); the report spec may select/reorder them, never add to them.
 # Default order = the catalog order = the pre-spec hardcoded order.
 
+# Woven AI commentary: the guard-passed, block-tagged sections from the sidecar.
+# Each renders as a quiet "AI read" aside directly under its chart; whatever isn't
+# woven (scorecard/incrementality/general) stays in the standalone section below.
+_ai_sections: dict[str, list[str]] = {}
+_ai_payload = None
+if _ai_on:
+    _ai_payload, _ai_side_note = load_active_commentary_sections(ROOT)
+    for _s in (_ai_payload or {}).get("sections") or []:
+        _ai_sections.setdefault(_s.get("block") or "general", []).append(_s["text"])
+
+
+def _ai_aside(block: str) -> None:
+    for _txt in _ai_sections.get(block, []):
+        theme.ai_aside(_txt)
+
 
 def _block_kpi_trend() -> None:
     b = insights.kpi_trend_insight(weekly, kpi_label)
@@ -427,6 +463,7 @@ def _block_kpi_trend() -> None:
             theme.annotate(fig, x, y, text)
         theme.plotly_chart(fig, yfmt="count", height=340)
         theme.prose(b["narrative"])
+        _ai_aside("kpi_trend")
     st.divider()
 
 
@@ -449,6 +486,7 @@ def _block_claims_vs_measured() -> None:
             theme.plotly_chart(fig, yfmt="count", height=360,
                                select_key="sel_claims"))
         theme.prose(b["narrative"])
+        _ai_aside("claims_vs_measured")
     st.divider()
 
 
@@ -474,6 +512,7 @@ def _block_cost_per_outcome() -> None:
                else "per platform-claimed conversion")
         st.caption(f"Cost {cap}.")
         theme.prose(b["narrative"])
+        _ai_aside("cost_per_outcome")
     st.divider()
 
 
@@ -506,6 +545,7 @@ def _block_audience_callout() -> None:
                        "Warm retargeting audiences convert cheaper by construction — "
                        "compare within a type.")
             theme.prose(b["narrative"])
+            _ai_aside("audience_callout")
         st.divider()
 
 def _block_recruiting_pipeline() -> None:
@@ -530,6 +570,7 @@ def _block_recruiting_pipeline() -> None:
         theme.plotly_chart(fig, xfmt="count", height=80 + 46 * len(df), legend=False)
         st.caption(b["censor_note"])
         theme.prose(b["narrative"])
+        _ai_aside("recruiting_pipeline")
     st.divider()
 
 
@@ -571,6 +612,7 @@ def _block_pacing() -> None:
                 theme.plotly_chart(fig, height=320, legend=True,
                                    select_key="sel_overview_mix"))
         theme.prose(b["narrative"])
+        _ai_aside("pacing")
 
 
 # --- render the blocks: spec selection/order, else the full catalog in default order
@@ -588,19 +630,39 @@ for _name in (spec.get("blocks") or BLOCK_CATALOG):
     _BLOCK_RENDERERS[_name]()
 
 # --- AI commentary (A2): off by default, clearly stamped, number-guarded -----------
+# With a block-tagged sidecar, the per-block paragraphs are already WOVEN under their
+# charts above — the standalone section carries the lede, any un-woven sections
+# (scorecard / incrementality / general), and the recommendations. Without a sidecar
+# (older artifact), the full markdown renders here as before.
 if _ai_on:
-    _ai_body, _ai_note = load_active_commentary(ROOT)
     with _narrow():
         st.divider()
-        theme.action_title("AI commentary", STAMP)
-        if _ai_body:
-            theme.ai_block(_ai_body)
-            st.caption("Every number above was checked against the computed data before "
-                       "publication; recommendations come only from the "
+        if _ai_payload:
+            theme.action_title("AI summary & recommendations", STAMP)
+            _rendered = set(_BLOCK_RENDERERS)
+            _left_md = [_ai_payload.get("lede", "")]
+            _left_md += [f"## {s['title']}\n\n{s['text']}"
+                         for s in _ai_payload.get("sections") or []
+                         if (s.get("block") or "general") not in _rendered]
+            if _ai_payload.get("recommendations_md"):
+                _left_md.append("## Recommendations\n\n"
+                                + _ai_payload["recommendations_md"])
+            theme.ai_block("\n\n".join(p for p in _left_md if p))
+            st.caption("The per-chart “AI read” asides above come from the same "
+                       "artifact. Every number was checked against the computed data "
+                       "before publication; recommendations come only from the "
                        "deterministically-eligible menu.")
         else:
-            st.info(_ai_note or "No AI commentary yet — run "
-                    "`python scripts/advise.py --commentary`.")
+            _ai_body, _ai_note = load_active_commentary(ROOT)
+            theme.action_title("AI commentary", STAMP)
+            if _ai_body:
+                theme.ai_block(_ai_body)
+                st.caption("Every number above was checked against the computed data "
+                           "before publication; recommendations come only from the "
+                           "deterministically-eligible menu.")
+            else:
+                st.info(_ai_note or "No AI commentary yet — run "
+                        "`python scripts/advise.py --commentary`.")
 
 # --- external-context aside (DEFERRED: hidden until curated notes exist) -----------
 notes = insights.macro_context(cfg)

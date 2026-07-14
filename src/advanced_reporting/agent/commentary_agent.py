@@ -29,6 +29,12 @@ from .recommendations import MAX_RECS, REC_TITLES, eligible_recommendations
 from .spec_agent import DEFAULT_MODEL, load_active_spec
 
 COMMENTARY_PATH = Path("outputs/commentary_ai.md")
+# machine-readable sidecar (same stamp/hash/logic): sections tagged with the insight
+# block they belong to, so the dashboard can weave each paragraph under its chart
+COMMENTARY_JSON = Path("outputs/commentary_ai.json")
+
+# section tags beyond the block catalog: the scorecard, the MMM read, and a catch-all
+EXTRA_SECTION_TAGS = ("scorecard", "incrementality", "general")
 PROMPT_PATH = Path("system/prompts/commentary_agent.md")
 STAMP = "AI-drafted from computed facts — review before client use"
 # Bump when the deterministic numbers the commentary cites can change (e.g. the
@@ -225,13 +231,16 @@ def _schema(eligible: list[dict]) -> dict:
     When nothing is eligible the ``recommendations`` property is omitted entirely
     (additionalProperties: false makes it unwritable), rather than an empty enum."""
     types = sorted({r["type"] for r in eligible})
+    from .validate import BLOCK_CATALOG
     props: dict = {
         "lede": {"type": "string"},
         "sections": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
-            "required": ["title", "text"],
+            "required": ["title", "text", "block"],
             "properties": {"title": {"type": "string"},
-                           "text": {"type": "string"}}}},
+                           "text": {"type": "string"},
+                           "block": {"enum": list(BLOCK_CATALOG)
+                                     + list(EXTRA_SECTION_TAGS)}}}},
     }
     required = ["lede", "sections"]
     if types:
@@ -278,9 +287,12 @@ def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
         sections = sections[:_max_sections]
     else:
         dropped_sections = 0
-    for s in sections:
-        parts.append(f"## {_normalize_text(s.get('title', '')).strip()}\n\n"
-                     f"{_normalize_text(s.get('text', '')).strip()}")
+    clean_sections = [{"block": s.get("block") or "general",
+                       "title": _normalize_text(s.get("title", "")).strip(),
+                       "text": _normalize_text(s.get("text", "")).strip()}
+                      for s in sections]
+    for s in clean_sections:
+        parts.append(f"## {s['title']}\n\n{s['text']}")
     dropped: list[str] = []
     if recap_dropped:
         dropped.append(f"{len(recap_dropped)} recap section(s) (duplicate of the lede)")
@@ -308,7 +320,9 @@ def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
                      "Ordered by money at stake; max "
                      f"{MAX_RECS} per report (recommendation_menu.md).\n\n"
                      + "\n".join(recs))
-    return "\n\n".join(p for p in parts if p), dropped
+    structured = {"lede": parts[0], "sections": clean_sections,
+                  "recommendations_md": "\n".join(recs)}
+    return "\n\n".join(p for p in parts if p), dropped, structured
 
 
 def generate_commentary(root: Path | None = None, model: str | None = None):
@@ -384,24 +398,56 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
         if not violations:
             break
         info["retried"] = attempt == 1
-    body, dropped = _render_body(data, eligible)
+    body, dropped, structured = _render_body(data, eligible)
     info["dropped"] = dropped
     if violations:
         info["violations"] = violations
         info["error"] = f"REJECTED by the number guard ({len(violations)} violations)"
         return None, info
 
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    data_hash = summaries.data_hash(root)
     front = "\n".join([
         "---", f"stamp: {STAMP}",
-        f"generated_at: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        f"generated_at: {generated_at}",
         f"model: {info.get('model')}",
-        f"data_hash: {summaries.data_hash(root)}",
+        f"data_hash: {data_hash}",
         f"logic_version: {LOGIC_VERSION}", "---", "",
     ])
     out_f = root / COMMENTARY_PATH
     out_f.parent.mkdir(parents=True, exist_ok=True)
     out_f.write_text(front + body + "\n", encoding="utf-8")
+    # the sidecar carries the SAME guard-passed text, tagged by block, so the
+    # dashboard can weave each paragraph under its chart
+    (root / COMMENTARY_JSON).write_text(json.dumps({
+        "stamp": STAMP, "generated_at": generated_at, "model": info.get("model"),
+        "data_hash": data_hash, "logic_version": LOGIC_VERSION, **structured,
+    }, indent=1), encoding="utf-8")
     return body, info
+
+
+def load_active_commentary_sections(root: Path | None = None) -> tuple[dict | None, str | None]:
+    """The dashboard's WEAVE read path: the block-tagged sidecar, or ``(None, note)``.
+
+    Same staleness rules as the markdown artifact (data hash + logic version) — a
+    woven paragraph must never contradict the chart it sits under. Missing sidecar
+    (pre-weave artifact) -> ``(None, None)``: pages fall back to the standalone md.
+    """
+    root = root or project_root()
+    f = root / COMMENTARY_JSON
+    if not f.exists():
+        return None, None
+    try:
+        payload = json.loads(f.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None, (f"{COMMENTARY_JSON} unreadable — re-run "
+                      "scripts/advise.py --commentary")
+    if payload.get("data_hash") != str(summaries.data_hash(root)):
+        return None, "AI commentary is stale (data changed) — re-run advise.py --commentary"
+    if payload.get("logic_version") != LOGIC_VERSION:
+        return None, ("AI commentary is stale (report logic changed) — re-run "
+                      "advise.py --commentary")
+    return payload, None
 
 
 def load_active_commentary(root: Path | None = None) -> tuple[str | None, str | None]:

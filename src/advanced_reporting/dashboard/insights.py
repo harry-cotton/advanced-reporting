@@ -188,6 +188,49 @@ def headline_tiles(weekly: pd.DataFrame, kpi_label: str = "key events") -> list[
     return tiles
 
 
+def spend_efficiency_trend(weekly: pd.DataFrame,
+                           kpi_label: str = "key events") -> dict | None:
+    """The exec hero chart: monthly paid spend (bars) + cost per measured outcome
+    (line) — the one picture of "how are we doing" over the flight.
+
+    Paid campaigns only (same scope as the tile row); months with no measured
+    outcomes get a NaN cost (gap in the line), never a fake zero. Returns None
+    without a measured series — a claimed-cost hero would grade the platforms'
+    own homework at the top of the page.
+    """
+    if not _has_measured(weekly) or "spend" not in weekly.columns:
+        return None
+    paid = weekly[weekly["channel"].isin(_paid_channels(weekly))].copy()
+    if paid.empty:
+        return None
+    paid["month"] = paid["date"].dt.to_period("M").dt.to_timestamp()
+    mo = (paid.groupby("month")
+              .agg(spend=("spend", "sum"), outcomes=("key_events", "sum"))
+              .reset_index().sort_values("month"))
+    mo = mo[mo["spend"] > 0]
+    if len(mo) < 3:
+        return None
+    mo["cost_per"] = mo["spend"] / mo["outcomes"].replace(0, np.nan)
+    valid = mo.dropna(subset=["cost_per"])
+    if len(valid) < 3:
+        return None
+    k = min(3, len(valid) // 2)
+    first = float(valid["cost_per"].iloc[:k].mean())
+    last = float(valid["cost_per"].iloc[-k:].mean())
+    pct = (last - first) / first if first else float("nan")
+    one = _singular(kpi_label)
+    if pct <= -0.03:
+        title = (f"{_a(one).capitalize()} costs {_money(last)} in recent months — "
+                 f"{abs(pct) * 100:.0f}% less than the flight's opening months")
+    elif pct >= 0.03:
+        title = (f"{_a(one).capitalize()} costs {_money(last)} in recent months — "
+                 f"{pct * 100:.0f}% more than the flight's opening months")
+    else:
+        title = f"Cost per {one} is holding steady at about {_money(last)}"
+    return {"title": title, "monthly": mo, "first_cost": first, "last_cost": last,
+            "trend_pct": pct}
+
+
 def spend_mix(weekly: pd.DataFrame) -> pd.DataFrame:
     """Paid spend share by channel (for the compact mix donut)."""
     paid = weekly[weekly["channel"].isin(_paid_channels(weekly))]

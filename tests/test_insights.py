@@ -403,3 +403,25 @@ def test_applicant_quality_by_last_touch_channel():
     one = pd.DataFrame(rows)
     assert insights.applicant_quality_insight(
         one[one["channel"] == "google_search"]) is None
+
+
+def test_spend_efficiency_trend_monthly_hero():
+    # 20 weeks (~5 months); outcomes double in the second half while spend stays flat
+    dates = pd.date_range("2026-01-05", periods=20, freq="W-MON")
+    rows = []
+    for i, d in enumerate(dates):
+        mult = 1.0 if i < 10 else 2.0
+        rows.append({"date": d, "channel": "meta", "spend": 1000.0,
+                     "conversions": 40.0 * mult, "key_events": 20.0 * mult})
+        rows.append({"date": d, "channel": "organic_search", "spend": 0.0,
+                     "conversions": 0.0, "key_events": 5.0 * mult})
+    wk = pd.DataFrame(rows)
+    b = insights.spend_efficiency_trend(wk, "application starts")
+    mo = b["monthly"]
+    assert {"month", "spend", "cost_per"} <= set(mo.columns)
+    # outcomes double while spend is flat -> cost per start falls -> "less" title
+    assert b["trend_pct"] < 0 and "less" in b["title"]
+    # paid-only scope: organic rows carry no spend -> total = 20 wks x $1k
+    assert float(mo["spend"].sum()) == pytest.approx(20000.0)
+    # no measured series -> None (never a claimed-cost hero)
+    assert insights.spend_efficiency_trend(_weekly(measured=False)) is None

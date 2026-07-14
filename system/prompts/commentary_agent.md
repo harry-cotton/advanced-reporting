@@ -24,6 +24,14 @@ ELIGIBLE RECOMMENDATIONS (computed candidates; each cites its own evidence):
    name ("Overview", "Summary", "Headline performance", "At a glance", …) — the
    lede is the only summary; the renderer deletes recap sections.
 2. One short paragraph per insight block, weaving the FACTS into plain English.
+   Tag each section's `block` with the insight block it narrates (the FACTS keys:
+   kpi_trend, claims_vs_measured, cost_per_outcome, audience_callout,
+   recruiting_pipeline, pacing) — the dashboard renders each paragraph directly
+   under that chart. Use `scorecard` / `incrementality` for those sections and
+   `general` only when nothing fits.
+   Each paragraph sits UNDER the chart and its computed caption, so do not restate
+   the block's own narrative — add the read-through: what it means, how it connects
+   to the other blocks, what to watch next (numbers still only from FACTS).
 3. If FACTS.mmm exists, one short "Incrementality (modeled)" paragraph: which
    channels the model grades strong / cut-candidate / unproven against the client
    band, hedged ("the model estimates…"), never stated as proven causation.
