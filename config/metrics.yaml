@@ -136,6 +136,21 @@ metrics:
     formula: platform_revenue / spend
     format: ratio
     higher_is_better: true
+  # Post-submission applicant-pipeline volumes (CRM calendar-week counts). Counts ONLY:
+  # the gates lag media by months, so an in-window cost-per-stage would divide today's
+  # spend by last year's cohort — deliberately not defined here.
+  - key: conditional_offers
+    label: Conditional offers
+    tier: outcome
+    formula: conditional_offers
+    format: count
+    higher_is_better: true
+  - key: final_offers
+    label: Final offers
+    tier: outcome
+    formula: final_offers
+    format: count
+    higher_is_better: true
   - key: revenue
     label: Attributed revenue
     tier: outcome

@@ -59,6 +59,84 @@ def test_roi_intervals_verdicts():
     assert list(roi.index) == ["meta", "tiktok", "linkedin"]  # sorted by point ROI
 
 
+def _count_summary() -> pd.DataFrame:
+    # cost per incremental app = spend/contribution; interval flips the contribution CI.
+    return pd.DataFrame([
+        # strong: worst-case cost (600k/2000=300) still below good (400)
+        {"channel": "google_search", "spend": 600_000.0, "contribution": 2000.0,
+         "contribution_low": 2000.0, "contribution_high": 3000.0, "roi": 0.0033,
+         "roi_low": 0.0033, "roi_high": 0.005},
+        # unproven: interval straddles the band (best 250, worst 1000)
+        {"channel": "meta", "spend": 500_000.0, "contribution": 800.0,
+         "contribution_low": 500.0, "contribution_high": 2000.0, "roi": 0.0016,
+         "roi_low": 0.001, "roi_high": 0.004},
+        # cut candidate: even best-case cost (400k/500=800) above warn (650)
+        {"channel": "display", "spend": 400_000.0, "contribution": 400.0,
+         "contribution_low": 300.0, "contribution_high": 500.0, "roi": 0.001,
+         "roi_low": 0.00075, "roi_high": 0.00125},
+        # unproven / no measurable effect: contribution can't be ruled out as ~zero
+        {"channel": "audio", "spend": 200_000.0, "contribution": 0.0,
+         "contribution_low": 0.0, "contribution_high": 300.0, "roi": 0.0,
+         "roi_low": 0.0, "roi_high": 0.0015},
+    ])
+
+
+def _count_meta() -> dict:
+    return {"engine": "baseline", "target": "submitted_applications", "target_kind": "count",
+            "cost_per_outcome_target": {"good": 400, "warn": 650}, "kpi_label": "application starts",
+            "fit_metrics": {"r2": 0.98, "test_r2": 0.95, "test_mape": 0.06}}
+
+
+def test_is_count_target():
+    assert mmm_view.is_count_target(_count_meta()) is True
+    assert mmm_view.is_count_target(_meta()) is False        # currency default
+
+
+def test_cost_per_outcome_verdicts_and_band():
+    cpo = mmm_view.cost_per_outcome_intervals(_count_summary(), _count_meta()).set_index("channel")
+    assert cpo.loc["google_search", "verdict"] == "strong"       # whole interval below good
+    assert cpo.loc["meta", "verdict"] == "unproven"             # straddles the band
+    assert cpo.loc["display", "verdict"] == "cut_candidate"     # whole interval above warn
+    assert cpo.loc["audio", "verdict"] == "unproven"           # can't rule out zero effect
+    # cheapest first; the band is carried for the page
+    assert cpo.index[0] == "google_search"
+    assert cpo.loc["google_search", "good"] == 400 and cpo.loc["google_search", "warn"] == 650
+    # cost = spend / contribution point estimate
+    assert cpo.loc["google_search", "cost_per"] == 300.0
+    # a zero-contribution channel gets an infinite cost point (no measurable effect)
+    assert cpo.loc["audio", "cost_per"] == float("inf")
+
+
+def test_plain_summary_count_target_is_jargon_free():
+    contrib = pd.DataFrame({"baseline": [3000.0], "google_search": [2000.0],
+                            "meta": [800.0], "display": [400.0], "audio": [0.0]})
+    lines = mmm_view.plain_summary(_count_summary(), _count_meta(), contrib)
+    text = " ".join(lines)
+    # plain-language framing: paid vs baseline, the honesty note, the kpi label
+    assert "application starts" in text and "baseline" in text and "%" in text
+    assert "model estimates, not proven" in text.lower()
+    # the buckets land in the right plain-language sentence
+    assert "Working well" in text and "Google Search" in text        # strong (cost 300<400)
+    assert "Too expensive" in text and "Display" in text             # cut candidate
+    assert "Can't tell yet" in text and "Audio" in text              # unbounded interval
+    # NO analyst jargon
+    for bad in ("r²", "roi", "interval", "held-out", "adstock", "posterior"):
+        assert bad not in text.lower()
+
+
+def test_methodology_note_educates_and_is_engine_aware():
+    mer = mmm_view.methodology_note(_count_summary(), {**_count_meta(), "engine": "meridian"}).lower()
+    # explains the method in plain terms (concepts, not just numbers)
+    for concept in ("baseline", "carryover", "diminishing returns", "response curve"):
+        assert concept in mer
+    assert "correlation, not a controlled experiment" in mer      # honest about limits
+    assert "meridian" in mer and "region" in mer                  # geo-level engine framing
+    # the national baseline engine gets a different explanation (no Meridian/geo claim)
+    base_meta = {**_count_meta(), "engine": "baseline"}
+    base = mmm_view.methodology_note(_count_summary(), base_meta).lower()
+    assert "meridian" not in base and "national" in base
+
+
 def test_fit_cards_lead_with_held_out():
     cards = mmm_view.fit_cards(_meta())
     labels = [c[0] for c in cards]

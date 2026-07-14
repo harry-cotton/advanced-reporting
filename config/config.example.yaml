@@ -19,6 +19,14 @@ data:
   raw_dir: data/raw
   processed_dir: data/processed
   sample_file: data/raw/sample_campaigns.csv
+  # optional: business-KPI weekly CSV (CRM matchback) — defaults to
+  # data/raw/business_kpi_weekly.csv when unset
+  # kpi_path: "data/MMM Data/business_kpi_weekly.csv"
+  # optional: post-conversion pipeline stage counts (ATS/CRM export: week x geo x
+  # initiative x stage + last-touch channel). Reporting layer ONLY (the
+  # recruiting_pipeline block + outcome-tier volume metrics) — stages lag media by
+  # months and are never a modeling target or input.
+  # pipeline_stages_path: "data/MMM Data/crm_pipeline_stages.csv"
 
 modeling:
   engine: baseline            # "baseline" (always available) or "meridian"
@@ -35,6 +43,17 @@ modeling:
     - promo_flag
   adstock_max_lag: 8
   train_frac: 0.85
+  # Google Meridian sampler (only used when engine: meridian). Geo-level Bayesian MCMC —
+  # minutes on CPU, manual/local only (CI never fits Meridian). knots < n_weeks keeps the
+  # geo model identifiable; holdout_frac is a random-CELL held-out set for honest R².
+  meridian:
+    n_chains: 4
+    n_adapt: 500
+    n_burnin: 500
+    n_keep: 1000
+    knots: 20
+    holdout_frac: 0.15
+  # Meridian is geo-level: it also needs per-geo population weights (data.geo_populations).
 
 quality:
   spike_factor: 3.0           # flag a week if channel x geo spend > N x the prior week

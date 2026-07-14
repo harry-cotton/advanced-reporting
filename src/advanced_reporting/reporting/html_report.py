@@ -31,8 +31,10 @@ from ..agent.recommendations import eligible_recommendations  # noqa: E402
 from ..agent.spec_agent import load_active_spec  # noqa: E402
 from ..agent.validate import BLOCK_CATALOG  # noqa: E402
 from ..dashboard import insights, theme  # noqa: E402
-from ..dashboard.mmm_view import load_mmm  # noqa: E402
-from ..utils import load_config, project_root, scope_to_sources  # noqa: E402
+from ..dashboard.mmm_view import (cost_per_outcome_intervals, is_count_target,  # noqa: E402
+                                  load_mmm, plain_summary, roi_intervals)
+from ..utils import (load_config, load_pipeline_stages, project_root,  # noqa: E402
+                     scope_to_sources)
 
 REPORT_PATH = Path("outputs/client_report.html")
 
@@ -111,6 +113,109 @@ def _chart_trend(series: pd.DataFrame) -> str:
     return _img(_fig_to_b64(fig), "Outcome trend, paid vs organic & direct")
 
 
+def _chart_pipeline(stages: pd.DataFrame) -> str:
+    """Horizontal 6-stage applicant funnel: CRM-measured counts + pass-through."""
+    df = stages.iloc[::-1]          # first gate at the top
+    fig, ax = plt.subplots(figsize=(7.2, 0.6 + 0.5 * len(df)))
+    ax.barh(df["label"], df["value"], color=theme.MEASURED, height=0.55)
+    for i, (v, r) in enumerate(zip(df["value"], df["step_rate"])):
+        note = f"  {v:,.0f}" + (f"  ·  {r * 100:.0f}% of prior gate" if r == r else "")
+        ax.text(v, i, note, va="center", fontsize=9, color=theme.INK)
+    ax.set_xlim(0, float(df["value"].max()) * 1.45)
+    ax.xaxis.grid(True, color=theme.GRID, linewidth=0.6)
+    ax.yaxis.grid(False)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(theme.GRID)
+    ax.tick_params(colors=theme.INK_SOFT, labelsize=9)
+    ax.set_axisbelow(True)
+    return _img(_fig_to_b64(fig), "Applicant pipeline stages (CRM counts)")
+
+
+_V_COLORS = {"strong": theme.POSITIVE, "cut_candidate": theme.NEGATIVE,
+             "unproven": theme.INK_SOFT,
+             "profitable": theme.POSITIVE, "unprofitable": theme.NEGATIVE}
+
+
+def _chart_mmm_intervals(rows, *, xline=None, bands=None, fmt="${:,.0f}",
+                         xmax=None) -> str:
+    """Dot + 90%-interval strip per channel (the Incrementality page's verdict chart,
+    matplotlib-rendered for the emailable report). ``rows`` = [(label, lo, mid, hi,
+    verdict)]; ``bands`` = (good, warn) reference lines for a count target."""
+    import numpy as _np
+    fig, ax = plt.subplots(figsize=(7.2, 0.55 + 0.45 * len(rows)))
+    ys = range(len(rows))
+    for y, (label, lo, mid, hi, verdict) in zip(ys, rows):
+        color = _V_COLORS.get(verdict, theme.INK_SOFT)
+        lo_c = min(lo, xmax) if xmax else lo
+        hi_c = min(hi, xmax) if (xmax and _np.isfinite(hi)) else (xmax or hi)
+        ax.plot([lo_c, hi_c], [y, y], color=color, alpha=0.4, linewidth=4,
+                solid_capstyle="round")
+        if _np.isfinite(mid) and (not xmax or mid <= xmax):
+            ax.plot([mid], [y], "o", color=color, markersize=7)
+    ax.set_yticks(list(ys), [r[0] for r in rows])
+    ax.invert_yaxis()
+    if bands:
+        good, warn = bands
+        ax.axvspan(0, good, color=theme.POSITIVE, alpha=0.06)
+        ax.axvline(good, color=theme.INK_SOFT, linewidth=0.9, linestyle="--")
+        ax.axvline(warn, color=theme.INK_SOFT, linewidth=0.9, linestyle=":")
+    if xline is not None:
+        ax.axvline(xline, color=theme.INK_SOFT, linewidth=1.1, linestyle="--")
+    if xmax:
+        ax.set_xlim(0, xmax)
+    ax.xaxis.set_major_formatter(lambda v, _p: fmt.format(v))
+    ax.yaxis.grid(False)
+    ax.xaxis.grid(True, color=theme.GRID, linewidth=0.6)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(theme.GRID)
+    ax.tick_params(colors=theme.INK_SOFT, labelsize=9)
+    ax.set_axisbelow(True)
+    return _img(_fig_to_b64(fig), "Modeled incrementality with 90% intervals")
+
+
+def _incrementality_html(mmm: dict | None) -> str:
+    """Deterministic modeled-incrementality section — the product's marquee result,
+    embedded in the client deliverable (not left to commentary prose alone)."""
+    if not mmm:
+        return ""
+    import numpy as _np
+    meta = mmm.get("meta") or {}
+    kpi = meta.get("kpi_label") or str(meta.get("target", "outcomes")).replace("_", " ")
+    kpi_one = kpi[:-1] if kpi.endswith("s") else kpi
+    if is_count_target(meta):
+        cpo = cost_per_outcome_intervals(mmm["summary"], meta)
+        good, warn = float(cpo["good"].iloc[0]), float(cpo["warn"].iloc[0])
+        xmax = warn * 2.5
+        rows = [(insights.channel_label(str(r["channel"])), float(r["cost_low"]),
+                 float(r["cost_per"]), float(r["cost_high"]), str(r["verdict"]))
+                for _, r in cpo.iterrows()]
+        n_strong = int((cpo["verdict"] == "strong").sum())
+        title = (f"Incrementality: {n_strong} of {len(cpo)} channels beat the "
+                 f"${good:,.0f} cost per incremental {kpi_one} target")
+        chart = _chart_mmm_intervals(rows, bands=(good, warn), xmax=xmax)
+        note = (f'<p class="soft">Dot = modeled cost per incremental {html.escape(kpi_one)}, '
+                "bar = 90% interval; green shading = the client's good band, dashed/dotted "
+                f"lines = good ${good:,.0f} / watch ${warn:,.0f}. A bar reaching the "
+                "right edge means the model cannot rule out zero effect. Modeled "
+                "estimates, not proven causation.</p>")
+    else:
+        roi = roi_intervals(mmm["summary"])
+        rows = [(insights.channel_label(str(r["channel"])), float(r["roi_low"]),
+                 float(r["roi"]), float(r["roi_high"]), str(r["verdict"]))
+                for _, r in roi.iterrows()]
+        n_ok = int((roi["verdict"] == "profitable").sum())
+        title = f"Incrementality: {n_ok} of {len(roi)} channels are confidently profitable"
+        chart = _chart_mmm_intervals(rows, xline=1.0, fmt="{:,.2f}x")
+        note = ('<p class="soft">Dot = modeled ROI, bar = 90% interval; only intervals '
+                "clear of the 1.0 line are conclusive. Modeled estimates, not proven "
+                "causation.</p>")
+    plain = plain_summary(mmm["summary"], meta, mmm.get("contributions"))
+    plain_html = _md_to_html("\n\n".join(p.replace("\\$", "$") for p in plain))
+    return _section(title, chart + note + plain_html)
+
+
 def _chart_mix(mix: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(4.4, 3.4))
     colors = [theme.channel_color(c, i) for i, c in enumerate(mix["channel"])]
@@ -136,6 +241,7 @@ def _md_to_html(md: str) -> str:
     for raw in md.splitlines():
         line = html.escape(raw.rstrip())
         line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+        line = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", line)
         line = re.sub(r"(?<![\w_])_([^_]+)_(?![\w_])", r"<em>\1</em>", line)
         if line.startswith("## "):
             if in_list:
@@ -231,26 +337,23 @@ def _channel_summary_html(weekly: pd.DataFrame, kpi_label: str) -> str:
         'claim ratio are the platforms\' self-reported counts on the same campaigns.</p>')
 
 
-_REC_TITLES = {
-    "unlock_mmm": "Unlock incrementality measurement",
-    "investigate_tracking": "Investigate conversion tracking",
-    "fix_naming": "Adopt the naming convention on unparsed ad sets",
-    "shift_within_type": "Shift budget to the cheaper audience (same type)",
-    "scale_with_test": "Scale the top channel with a controlled test",
-    "cut_or_restructure": "Restructure the underperforming channel",
-    "rebalance_channel_budget": "Rebalance channel budget",
-}
+from ..agent.recommendations import REC_TITLES as _REC_TITLES  # noqa: E402
 
 
 def _next_steps_html(recs: list[dict]) -> str:
     """Deterministic 'What we'd do next' — plain-English titles over the eligibility
-    engine's computed summaries (no LLM, no invented numbers)."""
+    engine's computed summaries (no LLM, no invented numbers). One entry PER TYPE:
+    three bullets all reading "Investigate conversion tracking" is one action, not
+    three next steps (live finding 2026-07-13)."""
     if not recs:
         return ""
+    seen: set = set()
+    distinct = [r for r in recs
+                if r["type"] not in seen and not seen.add(r["type"])]
     items = "".join(
         f'<li><strong>{html.escape(_REC_TITLES.get(r["type"], r["type"].replace("_", " ").capitalize()))}'
         f'</strong> — {html.escape(r.get("summary", ""))}</li>'
-        for r in recs[:3])
+        for r in distinct[:3])
     return _section("What we'd do next",
                     f'<ul>{items}</ul><p class="soft">Prioritised by impact; drawn from the '
                     'deterministic recommendation menu — never invented.</p>')
@@ -272,6 +375,7 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
     hist_f = root / "data" / "processed" / "history.parquet"
     hist = (scope_to_sources(pd.read_parquet(hist_f), cfg)
             if hist_f.exists() else None)
+    stages = load_pipeline_stages(cfg, root)   # CRM applicant gates (may be None)
 
     rep = cfg.get("reporting") or {}
     spec, spec_note = load_active_spec(root)
@@ -321,9 +425,18 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
         mix = insights.spend_mix(weekly)
         return _section(b["title"], _chart_mix(mix) + _md_to_html(b["narrative"]))
 
+    def _b_pipeline() -> str:
+        b = insights.recruiting_pipeline_insight(stages)
+        if not b:
+            return ""
+        return _section(b["title"], _chart_pipeline(b["stages"])
+                        + _md_to_html(b["narrative"]))
+
     renderers = {"kpi_trend": _b_kpi_trend, "claims_vs_measured": _b_claims,
                  "cost_per_outcome": _b_costper, "audience_callout": _b_audience,
-                 "pacing": _b_pacing}
+                 "recruiting_pipeline": _b_pipeline, "pacing": _b_pacing}
+    assert set(renderers) == set(BLOCK_CATALOG), \
+        "html_report block renderers out of sync with agent BLOCK_CATALOG"
     blocks_html = "".join(renderers[n]() for n in (spec.get("blocks")
                                                    or BLOCK_CATALOG))
 
@@ -342,6 +455,7 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
 
     # deterministic next steps (no LLM): the eligibility engine's computed recommendations
     mmm = load_mmm(root / "outputs")
+    mmm_html = _incrementality_html(mmm)
     unparsed = None
     try:
         from ..dashboard.drilldown import unparsed_stats
@@ -453,6 +567,7 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
 {flags_html}
 {blocks_html}
 {channel_tbl}
+{mmm_html}
 {scorecard}
 {next_steps}
 {ai_html}

@@ -160,6 +160,38 @@ def to_weekly_geo(df: pd.DataFrame) -> pd.DataFrame:
     return fill_calendar(weekly, ["channel", "geo"], freq="W-MON", metric_cols=cols)
 
 
+# Post-submission pipeline stages surfaced as weekly VOLUME columns. Counts only —
+# the applicant gates lag media by months, so no in-window cost-per-stage is ever
+# derived from these (a lagged denominator under today's spend would mislead).
+PIPELINE_STAGE_METRICS = {"conditional_offer": "conditional_offers",
+                          "final_offer": "final_offers"}
+
+
+def merge_pipeline_stages(weekly_long: pd.DataFrame,
+                          stages: pd.DataFrame | None) -> pd.DataFrame:
+    """Attach CRM pipeline volumes (conditional/final offers) to the weekly channel
+    table on (date, channel). ``stages`` comes from ``utils.load_pipeline_stages``
+    (channels already canonical); None / missing columns -> table returned unchanged.
+    Counts that fail to join (a channel/week absent from the media table) are warned
+    about loudly rather than silently dropped."""
+    if stages is None or len(stages) == 0 or "channel" not in stages.columns:
+        return weekly_long
+    s = stages[stages["stage"].isin(PIPELINE_STAGE_METRICS)]
+    if s.empty:
+        return weekly_long
+    pv = (s.groupby(["date", "channel", "stage"])["count"].sum()
+            .unstack("stage").rename(columns=PIPELINE_STAGE_METRICS).reset_index())
+    out = weekly_long.merge(pv, on=["date", "channel"], how="left")
+    for col in PIPELINE_STAGE_METRICS.values():
+        if col in pv.columns:
+            lost = float(pv[col].sum(skipna=True)) - float(out[col].sum(skipna=True))
+            if lost > 0.5:
+                print(f"  WARNING: {lost:,.0f} {col} did not join the weekly table "
+                      "(channel/week not present in the media data) — national totals "
+                      "will under-count")
+    return out
+
+
 def channel_metrics(weekly_long: pd.DataFrame) -> pd.DataFrame:
     """Add standard performance metrics for the dashboard."""
     d = weekly_long.copy()
@@ -184,10 +216,44 @@ def build_modeling_table(weekly_long: pd.DataFrame, kpi: pd.DataFrame,
 
     kpi = kpi.copy()
     kpi["date"] = pd.to_datetime(kpi["date"])
-    keep = ["date", target] + [c for c in control_cols if c in kpi.columns]
+    # A geo-grained KPI (e.g. the FBI CRM matchback: week x geo submitted applications) is
+    # aggregated to national: the target SUMS over geos; controls are geo-invariant, so the
+    # per-date value is taken once (mean collapses identical rows). The geo x weekly KPI is
+    # kept intact upstream for a future geo-level (Meridian) model.
+    present_controls = [c for c in control_cols if c in kpi.columns]
+    if "geo" in kpi.columns and kpi["date"].duplicated().any():
+        agg = {target: "sum", **{c: "mean" for c in present_controls}}
+        kpi = kpi.groupby("date", as_index=False).agg(agg)
+    keep = ["date", target] + present_controls
     model = (wide.merge(kpi[keep], on="date", how="inner")
                  .sort_values("date").reset_index(drop=True))
     return model
+
+
+def build_modeling_table_geo(weekly_geo: pd.DataFrame, kpi: pd.DataFrame,
+                             channel_cols: list[str], target: str = "revenue",
+                             date_col: str = "date",
+                             populations: dict | None = None) -> pd.DataFrame:
+    """Geo x weekly wide table for a GEO-LEVEL model (Meridian): one row per (date, geo)
+    with per-channel spend + the geo-grained KPI + a per-geo ``population``.
+
+    Cross-geo variation is what identifies effects a national model can't; the geo KPI must
+    therefore stay geo-grained (NOT aggregated). Time-only national controls are intentionally
+    left out — Meridian rejects controls that don't vary across geos (its per-time knots
+    absorb them). ``populations`` maps geo code -> population (defaults to 1.0)."""
+    wide = (weekly_geo.pivot_table(index=[date_col, "geo"], columns="channel",
+                                   values="spend", aggfunc="sum").fillna(0.0))
+    for c in channel_cols:
+        if c not in wide.columns:
+            wide[c] = 0.0
+    wide = wide[channel_cols].reset_index()
+    wide[date_col] = pd.to_datetime(wide[date_col])
+    kpi = kpi.copy()
+    kpi[date_col] = pd.to_datetime(kpi[date_col])
+    model = wide.merge(kpi[[date_col, "geo", target]], on=[date_col, "geo"], how="inner")
+    pops = populations or {}
+    model["population"] = model["geo"].map(pops).fillna(1.0).astype(float)
+    return model.sort_values([date_col, "geo"]).reset_index(drop=True)
 
 
 # --- Data-quality report -------------------------------------------------------------

@@ -311,3 +311,117 @@ def test_macro_context_stays_hidden(tmp_path):
                      encoding="utf-8")
     cfg["reporting"]["macro_context"]["notes_file"] = str(notes)
     assert insights.macro_context(cfg) == ["MBA search demand rose in Q1 (source: X)"]
+
+
+# ---------------------------------------------------------------- recruiting pipeline
+def _stages() -> pd.DataFrame:
+    """Two weeks x two channels of CRM stage counts, funnel-shaped."""
+    rows = []
+    for d in pd.date_range("2026-01-05", periods=2, freq="W-MON"):
+        for ch in ("google_search", "organic_search"):
+            for stage, n in (("initial_screening", 100.0), ("meet_greet", 70.0),
+                             ("testing", 30.0), ("conditional_offer", 24.0),
+                             ("background_investigation", 18.0), ("final_offer", 16.0)):
+                rows.append({"date": d, "geo": "US-NE", "initiative": "SA",
+                             "stage": stage, "channel": ch, "count": n})
+    return pd.DataFrame(rows)
+
+
+def test_recruiting_pipeline_insight_funnel_and_honesty():
+    b = insights.recruiting_pipeline_insight(_stages())
+    df = b["stages"]
+    assert list(df["stage"]) == insights.PIPELINE_STAGE_ORDER   # canonical order
+    # step rates: totals are 2x the per-cell numbers, so rates match the shape
+    mg = df.set_index("stage")
+    assert mg.loc["meet_greet", "step_rate"] == pytest.approx(0.70)
+    assert mg.loc["testing", "step_rate"] == pytest.approx(30 / 70)
+    # overall survival to final offer = 16%
+    assert b["overall_rate"] == pytest.approx(0.16)
+    assert "16%" in b["title"]
+    # the hardest gate is Testing (43%), named in the narrative
+    assert "Testing" in b["narrative"]
+    # the honesty voice + censoring annotation are non-negotiable
+    assert "cannot pass a polygraph" in b["narrative"]
+    assert "9–12 months" in b["narrative"]
+    assert b["censor_note"] == insights.PIPELINE_CENSOR_NOTE
+
+
+def test_recruiting_pipeline_insight_degrades_to_none():
+    assert insights.recruiting_pipeline_insight(None) is None
+    assert insights.recruiting_pipeline_insight(pd.DataFrame()) is None
+    # a single populated stage cannot make a funnel
+    one = _stages()
+    one = one[one["stage"] == "initial_screening"]
+    assert insights.recruiting_pipeline_insight(one) is None
+
+
+def test_merge_pipeline_stages_attaches_offer_volumes():
+    from advanced_reporting.transform.clean import merge_pipeline_stages
+    weekly = _weekly()
+    stages = _stages().replace({"channel": {"google_search": "meta"}})
+    out = merge_pipeline_stages(weekly, stages)
+    assert {"conditional_offers", "final_offers"} <= set(out.columns)
+    # national totals survive the join exactly: 2 wks x 2 chs x 24 / x 16
+    assert float(out["conditional_offers"].sum()) == pytest.approx(96.0)
+    assert float(out["final_offers"].sum()) == pytest.approx(64.0)
+    # untouched when there is nothing to merge
+    assert merge_pipeline_stages(weekly, None) is weekly
+
+
+def test_load_pipeline_stages_reads_and_standardizes(tmp_path):
+    from advanced_reporting.utils import load_pipeline_stages
+    f = tmp_path / "stages.csv"
+    _stages().replace({"channel": {"google_search": "organic"}}).to_csv(f, index=False)
+    cfg = {"data": {"pipeline_stages_path": str(f)}}
+    df = load_pipeline_stages(cfg, tmp_path)
+    assert df is not None and set(df["channel"]) == {"organic_search"}  # aliased
+    # unset key / missing file -> None (block simply doesn't render)
+    assert load_pipeline_stages({"data": {}}, tmp_path) is None
+    assert load_pipeline_stages(
+        {"data": {"pipeline_stages_path": "nope.csv"}}, tmp_path) is None
+
+
+def test_applicant_quality_by_last_touch_channel():
+    rows = []
+    for d in pd.date_range("2026-01-05", periods=2, freq="W-MON"):
+        for ch, scr, adv in (("google_search", 400.0, 320.0),
+                             ("jobboards", 300.0, 180.0),
+                             ("display", 30.0, 2.0)):        # below the volume floor
+            rows.append({"date": d, "stage": "initial_screening", "channel": ch,
+                         "count": scr})
+            rows.append({"date": d, "stage": "meet_greet", "channel": ch,
+                         "count": adv})
+    b = insights.applicant_quality_insight(pd.DataFrame(rows), min_screened=500)
+    per = b["per_channel"].set_index("channel")
+    assert "display" not in per.index                        # 60 screened < 500 floor
+    assert per.loc["google_search", "survival"] == pytest.approx(0.80)
+    assert per.loc["jobboards", "survival"] == pytest.approx(0.60)
+    # honesty labels are non-negotiable
+    assert "last-touch" in b["narrative"] and "not causal" in b["narrative"]
+    # degrades to None without the stage frame or with one channel only
+    assert insights.applicant_quality_insight(None) is None
+    one = pd.DataFrame(rows)
+    assert insights.applicant_quality_insight(
+        one[one["channel"] == "google_search"]) is None
+
+
+def test_spend_efficiency_trend_monthly_hero():
+    # 20 weeks (~5 months); outcomes double in the second half while spend stays flat
+    dates = pd.date_range("2026-01-05", periods=20, freq="W-MON")
+    rows = []
+    for i, d in enumerate(dates):
+        mult = 1.0 if i < 10 else 2.0
+        rows.append({"date": d, "channel": "meta", "spend": 1000.0,
+                     "conversions": 40.0 * mult, "key_events": 20.0 * mult})
+        rows.append({"date": d, "channel": "organic_search", "spend": 0.0,
+                     "conversions": 0.0, "key_events": 5.0 * mult})
+    wk = pd.DataFrame(rows)
+    b = insights.spend_efficiency_trend(wk, "application starts")
+    mo = b["monthly"]
+    assert {"month", "spend", "cost_per"} <= set(mo.columns)
+    # outcomes double while spend is flat -> cost per start falls -> "less" title
+    assert b["trend_pct"] < 0 and "less" in b["title"]
+    # paid-only scope: organic rows carry no spend -> total = 20 wks x $1k
+    assert float(mo["spend"].sum()) == pytest.approx(20000.0)
+    # no measured series -> None (never a claimed-cost hero)
+    assert insights.spend_efficiency_trend(_weekly(measured=False)) is None

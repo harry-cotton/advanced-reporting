@@ -136,3 +136,53 @@ def unparsed_stats(hist: pd.DataFrame) -> dict:
         "names": sorted(unp["ad_group"].unique()),
         "spend": float(unp["spend"].sum()),
     }
+
+
+def creative_initiative_table(hist: pd.DataFrame) -> pd.DataFrame:
+    """Creative x career-path (initiative) rollup — "what messaging works where".
+
+    The initiative is decoded from the campaign name's optional trailing segment;
+    creative fields exist only where ad names follow the Ad grammar (LinkedIn in the
+    FBI dataset — the caption on the page says so, and pitches extending the grammar).
+    Claimed-only by the module honesty rule.
+    """
+    from ..ingestion.naming_decode import decode_campaign_name
+
+    ag = ad_group_table(hist)
+    ag = ag[ag["creative"] != ""].copy()
+    if ag.empty:
+        return pd.DataFrame(columns=["creative", "creative_format", "initiative",
+                                     *_METRICS, "cost_per_claimed"])
+    ag["initiative"] = ag["campaign"].map(
+        lambda c: decode_campaign_name(c).initiative or "(none)")
+    per = (ag.groupby(["creative", "creative_format", "initiative"], as_index=False)
+             [_METRICS].sum(min_count=1))
+    per["cost_per_claimed"] = per["spend"] / per["conversions"].replace(0, pd.NA)
+    return per.sort_values(["initiative", "cost_per_claimed"]).reset_index(drop=True)
+
+
+def geo_summary(hist: pd.DataFrame, kpi: pd.DataFrame | None = None,
+                populations: dict | None = None) -> pd.DataFrame:
+    """Per-geo rollup for the Geography page.
+
+    Columns: geo, spend (paid), key_events (GA4-measured, ALL traffic), start_share,
+    plus submitted_applications when the CRM KPI frame is given, and pop_share /
+    vs_population (start share / population share) when population weights exist.
+    ``vs_population`` reads as an over/under-index: 1.0 = starts proportional to
+    population; provenance stays descriptive (never causal).
+    """
+    d = hist[hist["geo"].fillna("") != ""]
+    if d.empty:
+        return pd.DataFrame(columns=["geo", "spend", "key_events", "start_share"])
+    per = (d.groupby("geo")
+             .agg(spend=("spend", "sum"), key_events=("key_events", "sum"))
+             .reset_index())
+    total = float(per["key_events"].sum())
+    per["start_share"] = per["key_events"] / total if total else pd.NA
+    if kpi is not None and {"geo", "submitted_applications"}.issubset(kpi.columns):
+        sub = (kpi.groupby("geo", as_index=False)["submitted_applications"].sum())
+        per = per.merge(sub, on="geo", how="left")
+    if populations:
+        per["pop_share"] = per["geo"].map(populations)
+        per["vs_population"] = per["start_share"] / per["pop_share"]
+    return per.sort_values("key_events", ascending=False).reset_index(drop=True)

@@ -198,6 +198,9 @@ _cfg = {
     "impressions": st.column_config.NumberColumn("Impr.", format="%,.0f"),
     "clicks": st.column_config.NumberColumn("Clicks", format="%,.0f"),
     "conversions": st.column_config.NumberColumn("Claimed conv.", format="%,.0f"),
+    "sessions": st.column_config.NumberColumn("Sessions", format="%,.0f"),
+    "engaged_sessions": st.column_config.NumberColumn("Engaged", format="%,.0f"),
+    "video_views": st.column_config.NumberColumn("Video views", format="%,.0f"),
     "ctr": st.column_config.NumberColumn("CTR", format="percent"),
     "eng_rate": st.column_config.NumberColumn("Eng. rate", format="percent"),
     "cpa": st.column_config.NumberColumn("CPA (claimed)", format="$%,.2f"),
@@ -231,7 +234,36 @@ st.caption("Mono combos: graphite bars (spend/volume) + ink line (efficiency). "
 
 # --- MMM summary (if a model run is available) ---
 if summary_f.exists():
-    st.subheader("MMM — estimated contribution & ROI (90% intervals)")
-    st.dataframe(pd.read_csv(summary_f), use_container_width=True)
+    from advanced_reporting.dashboard import mmm_view
+    _run = mmm_view.load_mmm(ROOT / "outputs")
+    if _run and mmm_view.is_count_target(_run["meta"]):
+        # count target: cost per incremental outcome is the readable analyst view —
+        # raw apps-per-$ ROIs (0.0024) are technically right and humanly useless
+        st.subheader("MMM — modeled contribution & cost per incremental outcome "
+                     "(90% intervals)")
+        _cpo = mmm_view.cost_per_outcome_intervals(_run["summary"], _run["meta"])
+        _t = pd.DataFrame({
+            "Channel": [theme.channel_label(c) for c in _cpo["channel"]],
+            "Spend": _cpo["spend"],
+            "Incremental (modeled)": _cpo["contribution"].round(0),
+            "Contribution 90% CI": [f"{lo:,.0f} – {hi:,.0f}" for lo, hi in
+                                    zip(_cpo["contribution_low"],
+                                        _cpo["contribution_high"])],
+            "Cost / incremental": _cpo["cost_per"],
+            "Cost 90% CI": [(f"${lo:,.0f} – ${hi:,.0f}" if pd.notna(hi) and hi != float("inf")
+                             else "can't rule out zero effect")
+                            for lo, hi in zip(_cpo["cost_low"], _cpo["cost_high"])],
+            "Verdict": _cpo["verdict"].str.replace("_", " "),
+        })
+        st.dataframe(_t, use_container_width=True, hide_index=True, column_config={
+            "Spend": st.column_config.NumberColumn("Spend", format="$%,.0f"),
+            "Incremental (modeled)": st.column_config.NumberColumn(
+                "Incremental (modeled)", format="%,.0f"),
+            "Cost / incremental": st.column_config.NumberColumn(
+                "Cost / incremental", format="$%,.0f"),
+        })
+    else:
+        st.subheader("MMM — estimated contribution & ROI (90% intervals)")
+        st.dataframe(pd.read_csv(summary_f), use_container_width=True, hide_index=True)
     st.caption("MMM figures are modeled, uncertainty-bound estimates — validate with "
                "experiments before reallocating budget.")

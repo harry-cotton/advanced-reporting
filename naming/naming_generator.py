@@ -33,16 +33,20 @@ thin = Side(style="thin", color="BFBFBF")
 BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
 
 PLAN_COLS = ["market", "channel", "objective", "audience_type", "audience_detail",
-             "creative", "format", "size", "placement", "version"]
+             "creative", "format", "size", "placement", "version", "initiative"]
+# ``initiative`` is an OPTIONAL trailing campaign segment (e.g. a career path / product
+# line): US_META_CONVERT_PROSPECT_SA. Blank -> the campaign name is the classic 4-segment
+# form (market_channel_objective_audience_type), so every pre-initiative plan still
+# generates and decodes unchanged. Decoded by ``ingestion/naming_decode.decode_campaign_name``.
 # Example plan: lists live in one cell (format/size/placement) and expand within the row.
 EXAMPLE_PLAN = [
-    ["US", "META",   "CONVERT", "PROSPECT", "INT-FITNESS",     "SUMMERSALE", "VID",         "9x16",        "FEED, REELS", "V1"],
-    ["US", "META",   "CONVERT", "PROSPECT", "LAL-1PCT",        "BRANDHERO",  "STATIC",      "1x1, 4x5",    "FEED",        "V1"],
-    ["US", "TIKTOK", "CONVERT", "RETARGET", "CART-ABANDON",    "SUMMERSALE", "VID",         "9x16",        "FEED",        "V1"],
-    ["US", "TIKTOK", "CONVERT", "RETARGET", "PDP-VIEW-30D",    "BRANDHERO",  "VID, STATIC", "9x16",        "REELS",       "V1"],
+    ["US", "META",   "CONVERT", "PROSPECT", "INT-FITNESS",     "SUMMERSALE", "VID",         "9x16",        "FEED, REELS", "V1", ""],
+    ["US", "META",   "CONVERT", "PROSPECT", "LAL-1PCT",        "BRANDHERO",  "STATIC",      "1x1, 4x5",    "FEED",        "V1", ""],
+    ["US", "TIKTOK", "CONVERT", "RETARGET", "CART-ABANDON",    "SUMMERSALE", "VID",         "9x16",        "FEED",        "V1", ""],
+    ["US", "TIKTOK", "CONVERT", "RETARGET", "PDP-VIEW-30D",    "BRANDHERO",  "VID, STATIC", "9x16",        "REELS",       "V1", ""],
 ]
 DEFAULT_SCHEME = [
-    ("Campaign", "market, channel, objective, audience_type", "_"),
+    ("Campaign", "market, channel, objective, audience_type, initiative", "_"),
     ("Ad Set",   "audience_type, audience_detail, placement", "_"),
     ("Ad",       "creative, format, size, version",           "_"),
 ]
@@ -59,8 +63,9 @@ CHANNEL_CANON = {
     "GOOGLE": "google_search", "GSEARCH": "google_search", "SEARCH": "google_search",
     "PMAX": "google_pmax", "LI": "linkedin", "LINKEDIN": "linkedin",
 }
-PREFERRED_FIELD_ORDER = ["market", "channel", "objective", "audience_type", "audience_detail",
-                         "audience", "creative", "format", "size", "placement", "version"]
+PREFERRED_FIELD_ORDER = ["market", "channel", "objective", "audience_type", "initiative",
+                         "audience_detail", "audience", "creative", "format", "size",
+                         "placement", "version"]
 NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 NAME_COLS = ["Campaign Name", "Ad Set Name", "Ad Name",
              "Landing URL (with UTMs)", "Ad Set Key (Campaign|Set)"]

@@ -223,11 +223,13 @@ def test_commentary_publishes_with_stamp_and_hash(tmp_path, monkeypatch):
         _good_reply(), {"model": "m", "input_tokens": 1, "output_tokens": 1,
                         "cost_usd": 0.0, "error": None}))
     body, info = CA.generate_commentary(tmp_path)
-    assert body and "investigate_tracking" in body
+    # recommendations render under their plain-English display titles, never raw enums
+    assert body and CA.REC_TITLES["investigate_tracking"] in body
+    assert "investigate_tracking" not in body
     text = (tmp_path / "outputs" / "commentary_ai.md").read_text(encoding="utf-8")
     assert CA.STAMP in text and "data_hash:" in text
     loaded, note = CA.load_active_commentary(tmp_path)
-    assert note is None and "investigate_tracking" in loaded
+    assert note is None and CA.REC_TITLES["investigate_tracking"] in loaded
 
 
 def test_commentary_rejected_on_invented_number(tmp_path, monkeypatch):

@@ -122,9 +122,17 @@ holds the granular media data.
   incl. AWS — no GCP lock-in). The **`baseline`** engine (geometric adstock + Hill saturation
   + ridge-regularized non-negative regression + bootstrap CIs) is the validated default and
   stand-in. Engines are pluggable via `mmm/factory.py`; select with `modeling.engine` in config.
-- `meridian_engine.py` is wired, but its `Analyzer → MMMResult` mapping is **intentionally
-  guarded (raises)** until validated against an installed Meridian version. Don't unguard it
-  without actually running Meridian and checking outputs.
+- `meridian_engine.py` is **VALIDATED + unguarded** (2026-07-13, google-meridian 1.7.0, FBI
+  recruiting dataset): the `Analyzer → MMMResult` mapping is implemented and real geo-level
+  MCMC fits produce sensible results (rank corr ≈0.90, all channels within 2x of truth,
+  held-out R² ≈1.0 — beating the national baseline engine). Two count-KPI-specific choices,
+  both required: `paid_media_prior_type="contribution"` (the default ROI prior is calibrated
+  for revenue and pins a count-KPI's tiny apps/$ ROI near 1); national time-only controls are
+  DROPPED (Meridian rejects controls that don't vary across geos — its per-time knots absorb
+  them). The mapping still fail-loud raises on an unrecognised posterior shape (version guard),
+  and Meridian MCMC is manual/local only — **CI never fits Meridian**. Select with
+  `modeling.engine: meridian`; `scripts/compare_engines.py` writes the truth/baseline/Meridian
+  side-by-side.
 - **Data layer (Phase 2, built):** canonical **daily** schema; `DataSource.fetch(start, end)`
   is the extraction contract; the **synthetic source is active** and real-platform connectors
   are skeletons. The **store (`history.parquet`) is the source of truth** the pipeline reads —

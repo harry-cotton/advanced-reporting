@@ -42,6 +42,10 @@ ADOBE = "adobe"
 # e.g. a Meta ad-set export still files under `meta_ads` next to campaign-level pulls)
 GOOGLE_ADGROUPS, META_ADSETS, LINKEDIN_CREATIVES = (
     "google_ads_adgroups", "meta_ads_adsets", "linkedin_ads_creatives")
+# Generic campaign-grain CSV (already-canonical columns): the single mappings-driven
+# reader for platforms that have no bespoke reader (programmatic display, CTV, audio,
+# jobboards). One reader, column names live in config/mappings.yaml — not one per platform.
+GENERIC_CAMPAIGN = "campaign_delivery"
 
 
 def _with_decoded(out: pd.DataFrame, names: pd.Series) -> pd.DataFrame:
@@ -52,6 +56,13 @@ def _with_decoded(out: pd.DataFrame, names: pd.Series) -> pd.DataFrame:
     for col in naming_decode.FIELD_COLUMNS:
         out[col] = decoded[col].to_numpy()
     return out
+
+
+def _add_region(out: pd.DataFrame, raw: pd.DataFrame) -> None:
+    """Carry an optional geo segment: a ``Region`` column (platform geo breakdown) becomes
+    the canonical ``geo`` (in place). Absent -> schema.normalize() defaults to 'national'."""
+    if "Region" in raw.columns:
+        out["geo"] = raw["Region"].astype(str).str.strip().to_numpy()
 
 
 def _num(s) -> pd.Series:
@@ -80,6 +91,9 @@ def detect_format(path) -> str | None:
         return META_ADSETS if "Ad set name" in first else META
     if "creative_id" in first and "applications_started" in first:
         return ADOBE
+    cols = {c.strip().strip('"') for c in first.split(",")}
+    if {"date", "channel", "campaign", "spend"} <= cols and "geo" in cols:
+        return GENERIC_CAMPAIGN
     return None
 
 
@@ -97,10 +111,17 @@ def _google_frame(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, skiprows=hdr)
     df = df[~df["Day"].astype(str).str.startswith("Total")]      # summary rows out
     ctype = df["Campaign type"].astype(str).str.strip().str.lower()
+    # Campaign type -> canonical channel: Search -> google_search; Video (YouTube video
+    # campaigns live in Google Ads) -> youtube; anything else -> google_demandgen.
+    def _google_channel(t: str) -> str:
+        if t == "search":
+            return "google_search"
+        if t in ("video", "youtube"):
+            return "youtube"
+        return "google_demandgen"
     out = pd.DataFrame({
         "date": pd.to_datetime(df["Day"], errors="coerce"),
-        "channel": ctype.map(lambda t: "google_search" if t == "search"
-                             else "google_demandgen"),
+        "channel": ctype.map(_google_channel),
         "campaign": df["Campaign"].astype(str).str.strip(),
         "campaign_id": df["Campaign ID"].astype(str).str.strip(),
         "spend": _num(df["Cost"]),
@@ -110,6 +131,7 @@ def _google_frame(path: Path) -> pd.DataFrame:
         "platform_revenue": _num(df["Conv. value"]),
         "currency": df["Currency code"].astype(str).str.strip(),
     })
+    _add_region(out, df)                                 # optional geo segment
     if "Video views" in df.columns:                      # Demand Gen / video (mid-funnel)
         out["video_views"] = _num(df["Video views"])
     if "Ad group" in df.columns:
@@ -150,6 +172,7 @@ def read_meta_export(path, mappings=None) -> pd.DataFrame:
         "conversions": _num(df["Results"]),
         "platform_revenue": float("nan"),                        # not in this export
     })
+    _add_region(out, df)                                         # optional geo segment
     if "Video plays" in df.columns:                              # mid-funnel engagement
         out["video_views"] = _num(df["Video plays"])
     if "Ad set name" in df.columns:                              # ad-set-level export
@@ -182,6 +205,7 @@ def _linkedin_frame(path: Path) -> tuple[pd.DataFrame, str | None]:
         "conversions": _num(df["Conversions"]),
         "platform_revenue": float("nan"),
     })
+    _add_region(out, df)                                         # optional geo segment
     if "Video Views" in df.columns:                              # mid-funnel engagement
         out["video_views"] = _num(df["Video Views"])
     # LinkedIn's hierarchy is Campaign -> Creative (no ad-set tier); a creative report's
@@ -242,6 +266,7 @@ def read_ga4_export(path, mappings=None) -> pd.DataFrame:
         "engaged_sessions": _num(df["Engaged sessions"]),
         "key_events": _num(df["Key events"]),
     })
+    _add_region(out, df)                                         # optional geo segment
     if "Views" in df.columns:                                    # GA4 page/screen views
         out["page_views"] = _num(df["Views"])
     return schema.to_canonical(out, GA4, mappings)
@@ -275,6 +300,29 @@ def read_adobe_export(path, mappings=None) -> pd.DataFrame:
                                currency="USD")
 
 
+def read_generic_campaign_export(path, mappings=None) -> pd.DataFrame:
+    """A plain campaign-grain CSV whose columns are the canonical names (mapped via
+    ``mappings['sources']['campaign_delivery']``). Used for programmatic display / CTV /
+    audio / jobboards — platforms with no bespoke UI export. Channels pass through
+    ``channel_aliases`` downstream; ``geo`` and ``currency`` are read straight from the file.
+    """
+    path = Path(path)
+    mappings = mappings or load_mappings()
+    df = pd.read_csv(path)
+    out = schema.apply_source_map(df, GENERIC_CAMPAIGN, mappings)
+    for col in ("spend", "impressions", "clicks", "conversions"):
+        if col in out.columns:
+            out[col] = _num(out[col])
+    if "date" in out.columns:
+        out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    if "platform_revenue" not in out.columns:
+        out["platform_revenue"] = float("nan")
+    currency = None
+    if "currency" in out.columns and out["currency"].notna().any():
+        currency = str(out["currency"].dropna().iloc[0])
+    return schema.to_canonical(out, GENERIC_CAMPAIGN, mappings, currency=currency)
+
+
 # format key -> (store source name, reader). Ad-level formats share their platform's
 # source so campaign- and ad-level pulls meet in one folder and the store's supersede
 # step can reconcile the two grains.
@@ -287,6 +335,7 @@ _READERS = {
     LINKEDIN_CREATIVES: (LINKEDIN, read_linkedin_creative_export),
     GA4: (GA4, read_ga4_export),
     ADOBE: (ADOBE, read_adobe_export),
+    GENERIC_CAMPAIGN: (GENERIC_CAMPAIGN, read_generic_campaign_export),
 }
 
 

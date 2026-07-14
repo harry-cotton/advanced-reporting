@@ -13,20 +13,28 @@ The artifact carries a front-matter stamp and the dashboard shows it only when
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from ..dashboard import insights
-from ..dashboard.mmm_view import load_mmm, roi_intervals
+from ..dashboard.mmm_view import (cost_per_outcome_intervals, is_count_target,
+                                  load_mmm, roi_intervals)
 from ..llm import call
-from ..utils import load_config, project_root, scope_to_sources
+from ..utils import load_config, load_pipeline_stages, project_root, scope_to_sources
 from . import guards, knowledge, summaries
-from .recommendations import MAX_RECS, eligible_recommendations
+from .recommendations import MAX_RECS, REC_TITLES, eligible_recommendations
 from .spec_agent import DEFAULT_MODEL, load_active_spec
 
 COMMENTARY_PATH = Path("outputs/commentary_ai.md")
+# machine-readable sidecar (same stamp/hash/logic): sections tagged with the insight
+# block they belong to, so the dashboard can weave each paragraph under its chart
+COMMENTARY_JSON = Path("outputs/commentary_ai.json")
+
+# section tags beyond the block catalog: the scorecard, the MMM read, and a catch-all
+EXTRA_SECTION_TAGS = ("scorecard", "incrementality", "general")
 PROMPT_PATH = Path("system/prompts/commentary_agent.md")
 STAMP = "AI-drafted from computed facts — review before client use"
 # Bump when the deterministic numbers the commentary cites can change (e.g. the
@@ -34,7 +42,7 @@ STAMP = "AI-drafted from computed facts — review before client use"
 # older logic version is treated as STALE and hidden with a re-run note — cached LLM
 # prose must never contradict the computed blocks it sits beside. (Independent of
 # ``data_hash``, which keys the spec: the data is unchanged, only the reporting logic.)
-LOGIC_VERSION = "2026-07-13-partial-weeks"
+LOGIC_VERSION = "2026-07-13-recruiting-pipeline"
 
 _GRADES = ("platform-claimed", "analytics-measured", "modeled")
 
@@ -55,14 +63,19 @@ def _records(df: pd.DataFrame, formats: dict) -> list[dict]:
 
 
 def _insight_facts(weekly: pd.DataFrame, hist: pd.DataFrame | None,
-                   kpi_label: str, budget: dict | None) -> dict:
+                   kpi_label: str, budget: dict | None,
+                   stages: pd.DataFrame | None = None) -> dict:
     money, count = insights._money, lambda v: f"{float(v):,.0f}"
     ratio = lambda v: f"{float(v):.1f}x"  # noqa: E731
     facts: dict = {}
 
     facts["headline_tiles"] = [
-        {k: t[k] for k in ("label", "value", "delta") if t.get(k) is not None}
+        {k: t[k] for k in ("label", "value", "delta", "help") if t.get(k) is not None}
         for t in insights.headline_tiles(weekly, kpi_label)]
+    facts["headline_tiles_note"] = (
+        "tile VALUES are full-period totals over PAID campaigns; deltas compare the "
+        "last 4 weeks to the prior 4. The scorecard's blended figures divide paid "
+        "spend by ALL-traffic outcomes — a different denominator; never equate them.")
 
     if b := insights.kpi_trend_insight(weekly, kpi_label):
         facts["kpi_trend"] = {"title": b["title"], "narrative": b["narrative"]}
@@ -90,6 +103,14 @@ def _insight_facts(weekly: pd.DataFrame, hist: pd.DataFrame | None,
                 "title": b["title"], "narrative": b["narrative"],
                 "gap": ratio(b["mult"]),
                 "note": "all audience figures platform-claimed"}
+    if b := insights.recruiting_pipeline_insight(stages):
+        facts["recruiting_pipeline"] = {
+            "title": b["title"], "narrative": b["narrative"],
+            "stages": _records(b["stages"], {
+                "label": str, "value": count,
+                "step_rate": lambda v: f"{float(v) * 100:.0f}%" if v == v else None}),
+            "note": ("selection outcomes, right-censored (recent cohorts still in "
+                     "flight) — never attribute these gates to media")}
     return facts
 
 
@@ -114,6 +135,34 @@ def _scorecard_facts(weekly: pd.DataFrame, tier: str, targets: dict,
 def _mmm_facts(mmm: dict | None) -> dict | None:
     if not mmm:
         return None
+    meta = mmm.get("meta") or {}
+    money = insights._money
+    if is_count_target(meta):
+        # Count target: ROI (outcomes/$) is meaningless prose — the facts the agent
+        # may cite are COST PER INCREMENTAL OUTCOME intervals vs the client band.
+        import numpy as np
+        cpo = cost_per_outcome_intervals(mmm["summary"], meta)
+        good, warn = float(cpo["good"].iloc[0]), float(cpo["warn"].iloc[0])
+        rows = []
+        for _, r in cpo.iterrows():
+            finite = np.isfinite(float(r["cost_high"]))
+            rows.append({
+                "channel": str(r["channel"]),
+                "cost_per_incremental": (money(float(r["cost_per"]))
+                                         if np.isfinite(float(r["cost_per"]))
+                                         else "not measurable"),
+                "interval_90": (f"{money(float(r['cost_low']))}-"
+                                f"{money(float(r['cost_high']))}" if finite
+                                else "cannot rule out zero incremental effect"),
+                "verdict": str(r["verdict"])})
+        return {"note": "modeled estimates with 90% intervals — directional, hedge "
+                        "causal language. Cost per INCREMENTAL outcome (the MMM "
+                        "target), graded against the client band — a different "
+                        "denominator from the descriptive cost-per figures above; "
+                        "never blend the two.",
+                "client_band": {"good": money(good), "warn": money(warn),
+                                "provenance": "client target"},
+                "cost_per_incremental_by_channel": rows}
     iv = roi_intervals(mmm["summary"])
     return {"note": "modeled estimates with 90% intervals — directional, hedge "
                     "causal language",
@@ -158,7 +207,8 @@ def build_facts(root: Path | None = None) -> tuple[dict, list[dict]] | None:
         "date_range": [str(weekly["date"].min().date()),
                        str(weekly["date"].max().date())],
         "n_paid_channels": len(insights._paid_channels(weekly)),
-        "insights": _insight_facts(weekly, hist, kpi_label, rep.get("budget")),
+        "insights": _insight_facts(weekly, hist, kpi_label, rep.get("budget"),
+                                   stages=load_pipeline_stages(cfg, root)),
         "primary_tier_scorecard": _scorecard_facts(
             weekly, tier, targets, kpi_label,
             config_target_keys=set(rep.get("targets") or {})),
@@ -181,13 +231,16 @@ def _schema(eligible: list[dict]) -> dict:
     When nothing is eligible the ``recommendations`` property is omitted entirely
     (additionalProperties: false makes it unwritable), rather than an empty enum."""
     types = sorted({r["type"] for r in eligible})
+    from .validate import BLOCK_CATALOG
     props: dict = {
         "lede": {"type": "string"},
         "sections": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
-            "required": ["title", "text"],
+            "required": ["title", "text", "block"],
             "properties": {"title": {"type": "string"},
-                           "text": {"type": "string"}}}},
+                           "text": {"type": "string"},
+                           "block": {"enum": list(BLOCK_CATALOG)
+                                     + list(EXTRA_SECTION_TAGS)}}}},
     }
     required = ["lede", "sections"]
     if types:
@@ -204,23 +257,47 @@ def _schema(eligible: list[dict]) -> dict:
             "required": required, "properties": props}
 
 
+_UESC = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _normalize_text(s: str) -> str:
+    """Decode literal ``\\uXXXX`` sequences the model sometimes writes INSIDE its JSON
+    strings (double-escaped em dashes rendered as raw ``\\u2014`` on the dashboard —
+    live finding 2026-07-13)."""
+    return _UESC.sub(lambda m: chr(int(m.group(1), 16)), str(s))
+
+
 def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
     """Deterministic markdown rendering of the structured reply. Returns
     ``(body, dropped)`` — recommendations whose type somehow isn't eligible are
     dropped and recorded (belt over the schema's braces)."""
     eligible_types = {r["type"] for r in eligible}
-    parts = [str(data.get("lede", "")).strip()]
+    parts = [_normalize_text(data.get("lede", "")).strip()]
     sections = list(data.get("sections") or [])
-    if len(sections) > 6:      # size caps live here now, not in the API schema
-        dropped_sections = len(sections) - 6
-        sections = sections[:6]
+    # a recap section under any name duplicates the lede AND crowds a real section
+    # past the cap (the model has tried "Overview", then "Headline performance")
+    _recap = re.compile(r"overview|summary|headline|at a glance", re.IGNORECASE)
+    recap_dropped = [s for s in sections if _recap.search(str(s.get("title", "")))]
+    sections = [s for s in sections if s not in recap_dropped]
+    # cap = one section per catalog block + scorecard + MMM (the old 6 silently
+    # dropped the recruiting-pipeline section once the catalog grew to 6 blocks)
+    _max_sections = 8
+    if len(sections) > _max_sections:
+        dropped_sections = len(sections) - _max_sections
+        sections = sections[:_max_sections]
     else:
         dropped_sections = 0
-    for s in sections:
-        parts.append(f"## {s.get('title', '').strip()}\n\n{s.get('text', '').strip()}")
+    clean_sections = [{"block": s.get("block") or "general",
+                       "title": _normalize_text(s.get("title", "")).strip(),
+                       "text": _normalize_text(s.get("text", "")).strip()}
+                      for s in sections]
+    for s in clean_sections:
+        parts.append(f"## {s['title']}\n\n{s['text']}")
     dropped: list[str] = []
+    if recap_dropped:
+        dropped.append(f"{len(recap_dropped)} recap section(s) (duplicate of the lede)")
     if dropped_sections:
-        dropped.append(f"{dropped_sections} section(s) over the 6-section cap")
+        dropped.append(f"{dropped_sections} section(s) over the {_max_sections}-section cap")
     all_recs = list(data.get("recommendations") or [])
     if len(all_recs) > MAX_RECS:
         dropped.append(f"{len(all_recs) - MAX_RECS} recommendation(s) over the "
@@ -233,13 +310,19 @@ def _render_body(data: dict, eligible: list[dict]) -> tuple[str, list[str]]:
             continue
         grade = r.get("evidence_grade")
         grade = grade if grade in _GRADES else "platform-claimed"
-        recs.append(f"- **{r['type']}** _({grade})_ — {str(r.get('text', '')).strip()}")
+        # plain-English title, never the raw enum ("cut_or_restructure" on a client
+        # screen reads as internal jargon)
+        title = REC_TITLES.get(r["type"], r["type"].replace("_", " ").capitalize())
+        recs.append(f"- **{title}** _({grade})_ — "
+                    f"{_normalize_text(r.get('text', '')).strip()}")
     if recs:
         parts.append("## Recommendations\n\n"
                      "Ordered by money at stake; max "
                      f"{MAX_RECS} per report (recommendation_menu.md).\n\n"
                      + "\n".join(recs))
-    return "\n\n".join(p for p in parts if p), dropped
+    structured = {"lede": parts[0], "sections": clean_sections,
+                  "recommendations_md": "\n".join(recs)}
+    return "\n\n".join(p for p in parts if p), dropped, structured
 
 
 def generate_commentary(root: Path | None = None, model: str | None = None):
@@ -300,8 +383,10 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
             + "\nEvery numeral must appear in FACTS / ELIGIBLE RECOMMENDATIONS / "
               "CLIENT CONTEXT exactly as given. Redraft, correcting or removing "
               "the offending numbers.")
+        # 16k: the FBI-scale FACTS payload (6 insight blocks incl. the recruiting
+        # pipeline) pushed replies past the old 8k ceiling (truncated 2026-07-13)
         data, info = call(prompt + retry_note, model=model,
-                          schema=_schema(eligible), max_tokens=8000)
+                          schema=_schema(eligible), max_tokens=16000)
         if data is None:
             return None, info
         authored = "\n".join(
@@ -313,24 +398,56 @@ def generate_commentary(root: Path | None = None, model: str | None = None):
         if not violations:
             break
         info["retried"] = attempt == 1
-    body, dropped = _render_body(data, eligible)
+    body, dropped, structured = _render_body(data, eligible)
     info["dropped"] = dropped
     if violations:
         info["violations"] = violations
         info["error"] = f"REJECTED by the number guard ({len(violations)} violations)"
         return None, info
 
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    data_hash = summaries.data_hash(root)
     front = "\n".join([
         "---", f"stamp: {STAMP}",
-        f"generated_at: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        f"generated_at: {generated_at}",
         f"model: {info.get('model')}",
-        f"data_hash: {summaries.data_hash(root)}",
+        f"data_hash: {data_hash}",
         f"logic_version: {LOGIC_VERSION}", "---", "",
     ])
     out_f = root / COMMENTARY_PATH
     out_f.parent.mkdir(parents=True, exist_ok=True)
     out_f.write_text(front + body + "\n", encoding="utf-8")
+    # the sidecar carries the SAME guard-passed text, tagged by block, so the
+    # dashboard can weave each paragraph under its chart
+    (root / COMMENTARY_JSON).write_text(json.dumps({
+        "stamp": STAMP, "generated_at": generated_at, "model": info.get("model"),
+        "data_hash": data_hash, "logic_version": LOGIC_VERSION, **structured,
+    }, indent=1), encoding="utf-8")
     return body, info
+
+
+def load_active_commentary_sections(root: Path | None = None) -> tuple[dict | None, str | None]:
+    """The dashboard's WEAVE read path: the block-tagged sidecar, or ``(None, note)``.
+
+    Same staleness rules as the markdown artifact (data hash + logic version) — a
+    woven paragraph must never contradict the chart it sits under. Missing sidecar
+    (pre-weave artifact) -> ``(None, None)``: pages fall back to the standalone md.
+    """
+    root = root or project_root()
+    f = root / COMMENTARY_JSON
+    if not f.exists():
+        return None, None
+    try:
+        payload = json.loads(f.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None, (f"{COMMENTARY_JSON} unreadable — re-run "
+                      "scripts/advise.py --commentary")
+    if payload.get("data_hash") != str(summaries.data_hash(root)):
+        return None, "AI commentary is stale (data changed) — re-run advise.py --commentary"
+    if payload.get("logic_version") != LOGIC_VERSION:
+        return None, ("AI commentary is stale (report logic changed) — re-run "
+                      "advise.py --commentary")
+    return payload, None
 
 
 def load_active_commentary(root: Path | None = None) -> tuple[str | None, str | None]:

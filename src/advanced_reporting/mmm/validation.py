@@ -32,9 +32,21 @@ DEFAULT_MIN_RANK_CORR = 0.7
 
 
 def load_ground_truth(path) -> dict:
-    """Read ground_truth.json -> {channel: {total_spend, total_contribution, roi}}."""
+    """Read ground_truth.json -> {channel: {total_spend, total_contribution, roi}}.
+
+    Handles two answer-key schemas: the classic ``generate_sample_data`` shape
+    (``{"channels": {ch: {total_spend, total_contribution, roi}}}``) and the scenario-DGP
+    shape (``{"by_channel": {ch: {spend, true_incremental_submitted, roi_apps_per_1k}}}``,
+    a COUNT target — ``roi`` is incremental outcomes per $, i.e. ``roi_apps_per_1k/1000``).
+    """
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return data["channels"]
+    if "channels" in data:
+        return data["channels"]
+    by_ch = data.get("by_channel", {})
+    return {ch: {"total_spend": v.get("spend", 0.0),
+                 "total_contribution": v.get("true_incremental_submitted", 0.0),
+                 "roi": v.get("roi_apps_per_1k", 0.0) / 1000.0}
+            for ch, v in by_ch.items()}
 
 
 def _spearman(a: pd.Series, b: pd.Series) -> float:
@@ -110,21 +122,39 @@ def recovery_report(channel_summary: pd.DataFrame, truth: dict,
     }
 
 
-def recovery_markdown(report: dict) -> str:
-    """Render the recovery report as markdown (written to outputs/validation.md)."""
+def recovery_markdown(report: dict, *, count: bool = False) -> str:
+    """Render the recovery report as markdown (written to outputs/validation.md).
+
+    ``count`` = the target is a COUNT (submitted applications): contributions render as
+    outcomes and ROI as incremental outcomes per $1k (not a currency ROI).
+    """
     L = ["# MMM validation — recovery vs known ground truth\n"]
     verdict = "✅ PASS" if report["passed"] else "❌ FAIL"
     L.append(f"**{verdict}** — {report['n_within_tolerance']}/{report['n_channels']} channels "
              f"within {report['tolerance']:.1f}x of true contribution; "
              f"rank correlation {report['rank_corr']:.2f} "
              f"(threshold {report['min_rank_corr']:.1f}).\n")
-    L.append("| channel | est contribution | true contribution | est/true | est ROI | true ROI | CI covers truth |")
+    if count:
+        L.append("_Count target (submitted applications): contribution is in outcomes, ROI "
+                 "is incremental applications per $1,000. The strict 2x / rank-0.7 gate is "
+                 "hard on the collinear pair + small channels by design; the national "
+                 "baseline engine tends to FAIL it (always-on media absorbs baseline level), "
+                 "while Meridian's geo-level Bayesian priors recover those channels — the "
+                 "reason it is the target engine._\n")
+        con = lambda v: f"{v:,.0f}"
+        roi = lambda v: f"{v*1000:.2f}"
+        headers = "| channel | est contribution | true contribution | est/true | est apps/$1k | true apps/$1k | CI covers truth |"
+    else:
+        con = lambda v: f"${v/1e6:.2f}M"
+        roi = lambda v: f"{v:.2f}"
+        headers = "| channel | est contribution | true contribution | est/true | est ROI | true ROI | CI covers truth |"
+    L.append(headers)
     L.append("|---|---:|---:|---:|---:|---:|:---:|")
     for r in report["per_channel"]:
         cov = {True: "yes", False: "NO", None: "-"}[r["ci_covers_truth"]]
-        L.append(f"| {r['channel']} | ${r['contribution_est']/1e6:.2f}M "
-                 f"| ${r['contribution_true']/1e6:.2f}M | {r['ratio_est_over_true']:.2f} "
-                 f"| {r['roi_est']:.2f} | {r['roi_true']:.2f} | {cov} |")
+        L.append(f"| {r['channel']} | {con(r['contribution_est'])} "
+                 f"| {con(r['contribution_true'])} | {r['ratio_est_over_true']:.2f} "
+                 f"| {roi(r['roi_est'])} | {roi(r['roi_true'])} | {cov} |")
     if report["ci_coverage"] is not None:
         L.append(f"\n90% CI coverage of truth: {report['ci_coverage']*100:.0f}% "
                  "(high coverage with wide intervals means honest uncertainty, "
@@ -151,10 +181,13 @@ def validate_run(outdir) -> dict | None:
     cs_path = outdir / "channel_summary.csv"
     if not gt_path.exists() or not cs_path.exists():
         return None
+    raw = json.loads(gt_path.read_text(encoding="utf-8"))
+    is_count = "by_channel" in raw and "channels" not in raw   # scenario-DGP count target
     truth = load_ground_truth(gt_path)
     summary = pd.read_csv(cs_path)
     fm_path = outdir / "fit_metrics.json"
     fit_metrics = json.loads(fm_path.read_text(encoding="utf-8")) if fm_path.exists() else None
     report = recovery_report(summary, truth, fit_metrics)
-    (outdir / "validation.md").write_text(recovery_markdown(report), encoding="utf-8")
+    (outdir / "validation.md").write_text(recovery_markdown(report, count=is_count),
+                                          encoding="utf-8")
     return report

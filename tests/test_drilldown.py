@@ -98,3 +98,39 @@ def test_empty_store_degrades_gracefully():
     assert drilldown.audience_summary(empty).empty
     assert drilldown.audience_weekly(empty).empty
     assert drilldown.unparsed_stats(empty)["row_rate"] == 0.0
+
+
+def test_geo_summary_shares_and_population_index():
+    import pandas as pd
+    from advanced_reporting.dashboard.drilldown import geo_summary
+    hist = pd.DataFrame({
+        "geo": ["US-A", "US-A", "US-B"], "spend": [100.0, None, 300.0],
+        "key_events": [30.0, 30.0, 40.0]})
+    kpi = pd.DataFrame({"geo": ["US-A", "US-B"], "submitted_applications": [10, 20]})
+    g = geo_summary(hist, kpi=kpi, populations={"US-A": 0.25, "US-B": 0.75})
+    a = g.set_index("geo").loc["US-A"]
+    assert a["key_events"] == 60.0 and a["start_share"] == pytest.approx(0.6)
+    assert a["submitted_applications"] == 10
+    # 60% of starts on 25% of population -> 2.4x over-index
+    assert a["vs_population"] == pytest.approx(2.4)
+    # blank geos dropped; empty frame degrades to empty
+    assert geo_summary(pd.DataFrame({"geo": [""], "spend": [1.0],
+                                     "key_events": [1.0]})).empty
+
+
+def test_creative_initiative_decodes_career_path():
+    import pandas as pd
+    from advanced_reporting.dashboard.drilldown import creative_initiative_table
+    rows = []
+    for init, conv in (("SA", 10.0), ("CYBER", 40.0)):
+        rows.append({"date": "2026-01-05", "channel": "linkedin",
+                     "campaign": f"US_LINKEDIN_CONSIDER_PROSPECT_{init}",
+                     "ad_group": "TESTIM-AGENT_VID", "audience_type": "",
+                     "audience_detail": "", "creative": "TESTIM-AGENT",
+                     "creative_format": "VID", "geo": "US-NE", "spend": 100.0,
+                     "impressions": 1000.0, "clicks": 10.0, "conversions": conv})
+    t = creative_initiative_table(pd.DataFrame(rows))
+    per = t.set_index("initiative")
+    assert set(per.index) == {"SA", "CYBER"}
+    assert per.loc["SA", "cost_per_claimed"] == pytest.approx(10.0)
+    assert per.loc["CYBER", "cost_per_claimed"] == pytest.approx(2.5)

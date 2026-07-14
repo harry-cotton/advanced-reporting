@@ -94,13 +94,18 @@ else:
 # --- cost ranking + spend share side by side ----------------------------------------
 _left, _right = st.columns([1, 1])
 with _left:
-    if len(known) >= 2:
-        best, worst = known.iloc[0], known.iloc[-1]
+    # The headline comparison stays WITHIN one audience type — a cross-type "LAL beats
+    # SITE-90D" claim is exactly the warm-vs-cold misread the caption below warns about.
+    # Take the type with the widest within-type spread (same rule as the Exec block).
+    _grps = [g for _, g in known.groupby("audience_type", sort=False) if len(g) >= 2]
+    if _grps:
+        _g = max(_grps, key=lambda g: (g["cost_per_claimed"].iloc[-1]
+                                       / g["cost_per_claimed"].iloc[0]))
+        best, worst = _g.iloc[0], _g.iloc[-1]
         mult = worst["cost_per_claimed"] / best["cost_per_claimed"]
         theme.action_title(
-            f"{best['audience_type']} · {best['audience_detail']} is {mult:.1f}× cheaper "
-            f"per claimed conversion than {worst['audience_type']} · "
-            f"{worst['audience_detail']}",
+            f"Among {best['audience_type']} audiences, {best['audience_detail']} is "
+            f"{mult:.1f}× cheaper per claimed conversion than {worst['audience_detail']}",
             "Cost per platform-claimed conversion, cheapest first.")
     else:
         theme.action_title("Cost per platform-claimed conversion by audience")
@@ -161,18 +166,60 @@ if not cre.empty:
     theme.plotly_chart(fig, xfmt="currency", height=80 + 40 * len(cre), legend=False)
     st.caption("Teal = video, plum = static/other. All figures platform-claimed.")
 
+    # --- what messaging works WHERE: creative x career path ---------------------------
+    ci = drilldown.creative_initiative_table(hist)
+    ci = ci[ci["conversions"].fillna(0) > 0]
+    if not ci.empty and ci["initiative"].nunique() >= 2:
+        best = ci.loc[ci["cost_per_claimed"].idxmin()]
+        _spread = (float(ci["cost_per_claimed"].max())
+                   / float(ci["cost_per_claimed"].min()))
+        # only claim a winner when the spread is material — "works hardest" on a 4%
+        # gap is exactly the over-claim the honesty voice exists to prevent
+        if _spread >= 1.15:
+            _t = (f"{best['creative']} works hardest for {best['initiative']} — "
+                  f"${float(best['cost_per_claimed']):,.0f} per claimed conversion")
+        else:
+            _t = ("Creative costs are flat across career paths — no message is "
+                  "out-earning the others yet")
+        theme.action_title(
+            _t, "Cost per platform-claimed conversion, creative × career path (the "
+            "initiative decoded from the campaign name).")
+        pv = (ci.pivot_table(index=["creative", "creative_format"],
+                             columns="initiative", values="cost_per_claimed",
+                             aggfunc="first"))
+        pv.index = [f"{c} · {f}" for c, f in pv.index]
+        pv = pv.reset_index().rename(columns={"index": "creative"})
+        st.dataframe(
+            pv, use_container_width=True, hide_index=True,
+            column_config={c: (st.column_config.TextColumn("Creative") if c == "creative"
+                               else st.column_config.NumberColumn(c, format="$%,.0f"))
+                           for c in pv.columns})
+        st.caption(
+            "Cost per **platform-claimed** conversion per cell — read across a row to "
+            "see where a message earns its keep. _Creative names decode only where ad "
+            "names follow the Ad grammar (LinkedIn here); adopting the naming "
+            "convention on Meta/Google ads would unlock this view across every "
+            "channel._")
+
 # --- trend for the top audiences --------------------------------------------------------
 tr = drilldown.audience_weekly(hist)
 if not tr.empty:
     tots = tr.groupby("audience")["conversions"].sum().sort_values(ascending=False)
     theme.action_title(
-        f"{tots.index[0]} drives the most claimed conversions week after week",
-        "Weekly platform-claimed conversions, top audiences by spend.")
+        f"{tots.index[0]} drives the most claimed conversions month after month",
+        "Monthly platform-claimed conversions, top audiences by spend (weekly lines "
+        "over a 131-week flight read as noise).")
+    # stable muted hues (never the amber/ink honesty pair or RAG saturations) — the
+    # plotly default rainbow is off-palette for the house style
+    _line_colors = ["#4E79A7", "#B0623A", "#2A9D8F", "#9C6BA3", "#6B8E23", "#B8860B"]
+    _mo = tr.copy()
+    _mo["month"] = pd.to_datetime(_mo["date"]).dt.to_period("M").dt.to_timestamp()
+    _mo = _mo.groupby(["month", "audience"], as_index=False)["conversions"].sum()
     fig = go.Figure()
     for i, a in enumerate(tots.index):
-        g = tr[tr["audience"] == a]
-        fig.add_scatter(x=g["date"], y=g["conversions"], name=a, mode="lines",
-                        line=dict(width=2))
+        g = _mo[_mo["audience"] == a]
+        fig.add_scatter(x=g["month"], y=g["conversions"], name=a, mode="lines",
+                        line=dict(width=2, color=_line_colors[i % len(_line_colors)]))
     theme.plotly_chart(fig, yfmt="count", height=340)
 
 # --- the full table ---------------------------------------------------------------------

@@ -1,6 +1,29 @@
 # Build brief — "FBI Talent Acquisition" synthetic engagement (MMM + Meridian + full UI)
 
-**STATUS: APPROVED, NOT YET BUILT** (planned 2026-07-13 on Fable; execute on cheaper models).
+**STATUS: P0–P5 COMPLETE (2026-07-13) — the build is DONE** (`pytest -q` 314 passed).
+**P5 delivered:** FBI config block (cover names, $37.5M/131wk pacing, $160/$220 start
+band, objective-segment goals, ctv/audio/jobboards/social_organic identities); the
+`recruiting_pipeline` insight block (6-stage CRM funnel + censoring note + polygraph
+line, registered across BLOCK_CATALOG/app/html_report) + conditional_offers/final_offers
+outcome volumes; count-aware agent wiring (MMM recs + facts grade cost-per-incremental
+vs the client band — never ROI-vs-1.0); regenerated spec/commentary/client HTML with the
+FBI framing end-to-end (incl. a deterministic Incrementality interval-chart section in
+the report). **The ruthless UI review found and fixed two P1 DATA bugs:** deterministic
+per-row rounding was deleting sparse GA4 key events (LinkedIn: 55k sessions, ZERO starts;
+every claim ratio inflated ~40–100% above design), and the GA4 emitter wrote per-ad-entity
+rows whose duplicate dimension keys the store dedup silently discarded. After stochastic
+rounding + dimension-grain GA4 aggregation: blended cost/start **$169** (band 150–200),
+all claim ratios on design, unparsed spend 12% on design, Meridian re-validated (8/8
+within 2×, rank 0.90, held-out R² 1.0). Plus: within-type-only audience headlines,
+case-strict name decode (no more fake `cyber · evergreen` audience), flight close-out
+pacing wording, plain-English rec titles, \\uXXXX normalization. **Stretch delivered:**
+applicant screening-survival by last-touch channel on the Channels page (labeled
+last-touch, never causal). Next: merge `fbi-recruitment-mmm` → main (P6 planner
+full-circle remains the follow-up task).
+**(earlier status: P0–P4 complete)** — P0 scenario+grammar+spike, P1 DGP+emitters+ground-truth, P2 ingest+store+descriptive, P3 baseline MMM+count-target verdicts, **P4 Meridian: VALIDATED + UNGUARDED**; `pytest -q` green (306 passed, 1 skipped). **P4 result:** real geo-level Meridian fit (10 geos × 131 wks, ~5 min CPU) BEATS baseline — rank corr **0.90** (vs 0.76), **8/8 channels within 2×** (vs 3/8), held-out R² **1.00**, and it recovers the collinear pair + small channels baseline zeroed. `modeling.engine: meridian` renders the Incrementality page end-to-end; `scripts/compare_engines.py` → `outputs/engine_comparison.md` (truth vs baseline vs Meridian). Count-KPI keys that made it work: `paid_media_prior_type="contribution"`, drop national controls, random-cell holdout (see memory notes). **P5 (UI finish + review) is the only phase left.**
+**(earlier: P0–P3 complete, 303 passed.)** Dashboard ties out on the single FBI engagement ($37.5M, 10 geos, 131 wks); DQ anomalies cluster only in designed periods (Jan post-holiday ramp + May National Recruiting Week bursts + LinkedIn dark weeks). **P3 recovery:** rank corr ≈0.76, held-out R² 0.95, baseline recovered ≈83% (believable paid/baseline split), the collinear pair (meta/youtube) + saturation (google) + tiny audio behave as designed (wide/unproven). The baseline engine still over-credits paid modestly — the documented motivation for **Meridian (P4)**. Count-target layer (target_kind: count → cost-per-incremental-application verdicts good≤$400/warn≤$650, Incrementality page + commentary + validation.md formatting, "media buys applications; it cannot pass a polygraph") built + tested. **P4 (Meridian), P5 (UI finish) pending.** NB: fixed a silent geo×week flatten-scramble in the DGP; DGP tuned for MMM identifiability (per-channel rhythms, informative unemployment control, holiday quiet weeks) — see memory notes.
+**MERIDIAN SPIKE (P0): SUCCESS on Windows CPU.** `uv pip install google-meridian` → `google-meridian==1.7.0` (TensorFlow 2.20.0, tfp-nightly 0.26.0.dev, keras 3.15) installs and `import meridian` works in the project venv (Python 3.12.13). No WSL2/Colab fallback needed. Note: the install pinned numpy 2.5.1→2.3.5, pandas 3.0.3→2.3.3, matplotlib 3.11.0→3.10.9 in the shared venv; full suite re-run stayed green, so the downgrade is benign. P4 can attempt a real geo-level fit locally; CI must NOT install Meridian (heavy) — keep it manual/local per the `--mini` rule.
+**(originally: APPROVED, NOT YET BUILT — planned 2026-07-13 on Fable; execute on cheaper models.)**
 **Owner:** Harry. Treat as the spec; ask before deviating from a DECIDED item.
 **Scope decisions (settled 2026-07-13):** 2.5yr × 10 regions · ingestion via platform export
 files · MMM target = submitted applications (count) · task ends at **P5** (UI finish).

@@ -23,5 +23,7 @@ class BaseMMM(ABC):
 
     @abstractmethod
     def fit(self, model_df: pd.DataFrame, channel_cols, control_cols,
-            target: str = "revenue", date_col: str = "date") -> MMMResult:
+            target: str = "revenue", date_col: str = "date", **kwargs) -> MMMResult:
+        """Fit the model. ``**kwargs`` carries engine-specific extras (e.g. Meridian's
+        ``geo_df`` geo x weekly table); engines that don't use them must ignore them."""
         raise NotImplementedError

@@ -65,6 +65,12 @@ if weekly.empty:
 _measured = "key_events" in weekly.columns and weekly["key_events"].notna().any()
 _out_col = "key_events" if _measured else "conversions"
 _out_label = KPI.capitalize() if _measured else "Claimed conv."
+# non-paid rows contribute outcomes here (unlike the Exec hero, which is paid-only) —
+# say so, or the two pages read as contradicting totals (74k paid vs 162k all-traffic)
+_nonpaid_out = weekly[~weekly["channel"].isin(insights._paid_channels(weekly))]
+if (_measured and "key_events" in _nonpaid_out.columns
+        and float(_nonpaid_out["key_events"].fillna(0).sum()) > 0):
+    _out_label += " (all traffic)"
 
 
 def _compact(n: float) -> str:
@@ -152,7 +158,7 @@ theme.combo(mo["month"], mo["spend"], mo["cpc"], bar_name="Spend", line_name="CP
             bar_fmt="currency", line_fmt="$,.2f", y2_title="CPC", height=320)
 
 # --- efficiency view (paired bars: rank on the left, spend context on the right) ------
-eff = insights.cost_per_outcome_insight(weekly)
+eff = insights.cost_per_outcome_insight(weekly, KPI)
 if eff:
     theme.action_title(eff["title"])
     per = eff["per_channel"].sort_values("cost_per")     # cheapest first, both panels
@@ -239,3 +245,35 @@ else:
     st.download_button("Download full breakdown (CSV)",
                        ag.to_csv(index=False).encode("utf-8"),
                        "channel_campaign_audience_creative.csv", "text/csv")
+
+# --- applicant quality by last-touch channel (CRM pipeline; descriptive only) --------
+from advanced_reporting.utils import load_pipeline_stages  # noqa: E402
+
+
+@st.cache_data
+def _load_stages(mtime: float | None):
+    return load_pipeline_stages(_cfg, ROOT)
+
+
+_st_rel = (_cfg.get("data") or {}).get("pipeline_stages_path")
+_st_f = (ROOT / _st_rel) if _st_rel else None
+_aq = insights.applicant_quality_insight(
+    _load_stages(_st_f.stat().st_mtime if _st_f is not None and _st_f.exists() else None))
+if _aq:
+    st.divider()
+    theme.action_title(
+        _aq["title"],
+        "Share of screened applicants clearing the first gate, by the CRM's "
+        "last-touch channel — applicant quality, never causal media credit.")
+    _pv = _aq["per_channel"]
+    fig = go.Figure(go.Bar(
+        y=[theme.channel_label(c) for c in _pv["channel"]][::-1],
+        x=_pv["survival"].tolist()[::-1], orientation="h",
+        marker_color=[theme.channel_color(c, i)
+                      for i, c in enumerate(_pv["channel"])][::-1],
+        text=[f"{v * 100:.0f}%  ·  {n:,.0f} screened"
+              for v, n in zip(_pv["survival"], _pv["screened"])][::-1],
+        textposition="outside"))
+    fig.update_xaxes(range=[0, float(_pv["survival"].max()) * 1.35])
+    theme.plotly_chart(fig, xfmt="pct", height=80 + 40 * len(_pv), legend=False)
+    theme.prose(_aq["narrative"])

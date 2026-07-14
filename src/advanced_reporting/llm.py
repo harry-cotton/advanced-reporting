@@ -97,15 +97,25 @@ def call(prompt: str, *, model: str, schema: dict | None = None, system: str | N
     try:
         client = anthropic.Anthropic(timeout=timeout)
         msg = client.messages.create(**kwargs)
-        text = next(b.text for b in msg.content if b.type == "text")
+        text = next((b.text for b in msg.content if b.type == "text"), None)
         info["input_tokens"] = int(getattr(msg.usage, "input_tokens", 0) or 0)
         info["output_tokens"] = int(getattr(msg.usage, "output_tokens", 0) or 0)
         info["cost_usd"] = cost_usd(model, info["input_tokens"], info["output_tokens"])
         # A reply cut off at the token ceiling is truncated JSON — say THAT, not
         # "JSONDecodeError" (live finding 2026-07-11: the decode error hid the cause).
+        # Checked BEFORE the text-block lookup verdict: a reply that spent its whole
+        # budget inside a thinking block has no text block, and the old bare
+        # StopIteration hid this exact cause (live finding 2026-07-13).
         if getattr(msg, "stop_reason", None) == "max_tokens":
             info["error"] = (f"output truncated at max_tokens={max_tokens} — "
                              "raise the caller's max_tokens")
+            log.warning("LLM call failed (%s) — falling back to the deterministic "
+                        "path", info["error"])
+            return None, info
+        if text is None:
+            blocks = [getattr(b, "type", "?") for b in msg.content]
+            info["error"] = (f"no text block in reply (stop_reason="
+                             f"{getattr(msg, 'stop_reason', None)!r}, blocks={blocks})")
             log.warning("LLM call failed (%s) — falling back to the deterministic "
                         "path", info["error"])
             return None, info

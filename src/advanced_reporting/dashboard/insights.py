@@ -34,8 +34,12 @@ CHANNEL_LABELS = {
     "tiktok": "TikTok",
     "youtube": "YouTube",
     "display": "Display",
+    "ctv": "CTV",
+    "audio": "Audio",
+    "jobboards": "Job boards",
     "email": "Email",
     "organic_search": "Organic search",
+    "social_organic": "Organic social",
     "direct": "Direct",
 }
 
@@ -173,11 +177,58 @@ def headline_tiles(weekly: pd.DataFrame, kpi_label: str = "key events") -> list[
     if ("sessions" in weekly.columns and weekly["sessions"].notna().any()
             and float(weekly["sessions"].fillna(0).sum()) > 0):
         sess_w = weekly.groupby("date")["sessions"].sum(min_count=1).sort_index()
+        sess_n = float(sess_w.sum())
+        # compact form for the big supporting count ("6.57M", matching $37.50M) — the
+        # hero outcome keeps full precision, context tiles don't need 7 digits
+        sess_str = f"{sess_n / 1e6:.2f}M" if sess_n >= 1e6 else f"{sess_n:,.0f}"
         tiles.append({
-            "label": "Sessions", "value": f"{float(sess_w.sum()):,.0f}",
+            "label": "Sessions", "value": sess_str,
             "delta": _delta(sess_w), "delta_color": "normal",
             "help": "Site sessions (all traffic, incl. organic and direct)."})
     return tiles
+
+
+def spend_efficiency_trend(weekly: pd.DataFrame,
+                           kpi_label: str = "key events") -> dict | None:
+    """The exec hero chart: monthly paid spend (bars) + cost per measured outcome
+    (line) — the one picture of "how are we doing" over the flight.
+
+    Paid campaigns only (same scope as the tile row); months with no measured
+    outcomes get a NaN cost (gap in the line), never a fake zero. Returns None
+    without a measured series — a claimed-cost hero would grade the platforms'
+    own homework at the top of the page.
+    """
+    if not _has_measured(weekly) or "spend" not in weekly.columns:
+        return None
+    paid = weekly[weekly["channel"].isin(_paid_channels(weekly))].copy()
+    if paid.empty:
+        return None
+    paid["month"] = paid["date"].dt.to_period("M").dt.to_timestamp()
+    mo = (paid.groupby("month")
+              .agg(spend=("spend", "sum"), outcomes=("key_events", "sum"))
+              .reset_index().sort_values("month"))
+    mo = mo[mo["spend"] > 0]
+    if len(mo) < 3:
+        return None
+    mo["cost_per"] = mo["spend"] / mo["outcomes"].replace(0, np.nan)
+    valid = mo.dropna(subset=["cost_per"])
+    if len(valid) < 3:
+        return None
+    k = min(3, len(valid) // 2)
+    first = float(valid["cost_per"].iloc[:k].mean())
+    last = float(valid["cost_per"].iloc[-k:].mean())
+    pct = (last - first) / first if first else float("nan")
+    one = _singular(kpi_label)
+    if pct <= -0.03:
+        title = (f"{_a(one).capitalize()} costs {_money(last)} in recent months — "
+                 f"{abs(pct) * 100:.0f}% less than the flight's opening months")
+    elif pct >= 0.03:
+        title = (f"{_a(one).capitalize()} costs {_money(last)} in recent months — "
+                 f"{pct * 100:.0f}% more than the flight's opening months")
+    else:
+        title = f"Cost per {one} is holding steady at about {_money(last)}"
+    return {"title": title, "monthly": mo, "first_cost": first, "last_cost": last,
+            "trend_pct": pct}
 
 
 def spend_mix(weekly: pd.DataFrame) -> pd.DataFrame:
@@ -243,16 +294,24 @@ def _rag_gauge(value: float, higher_is_better: bool, good: float | None = None,
             "verdict": verdict, "mode": mode}
 
 
-def _outcome_relabel(key: str, label: str, kpi_label: str, measured: bool) -> str:
+def _outcome_relabel(key: str, label: str, kpi_label: str, measured: bool,
+                     blended: bool = False) -> str:
     """Relabel the outcome-tier metrics with the engagement's own KPI wording, so the
     scorecard says "Application starts" / "Cost / application start" — consistent with the
-    tiles and prose, and free of the hardcoded, wrong-here "(GA4)" vendor tag."""
+    tiles and prose, and free of the hardcoded, wrong-here "(GA4)" vendor tag.
+
+    ``blended``: the engagement has NON-PAID outcome rows, so the national metric mixes
+    organic outcomes under paid spend — a different number from the tile row's
+    paid-only cost. Say so in the label, or the two read as a contradiction ($504 paid
+    vs $232 blended, live finding 2026-07-13)."""
     if not measured:
         return label
     if key == "key_events":
-        return kpi_label.capitalize()
+        return (f"{kpi_label.capitalize()} (all traffic)" if blended
+                else kpi_label.capitalize())
     if key == "cost_per_key_event":
-        return f"Cost / {_singular(kpi_label)}"
+        return (f"Cost / {_singular(kpi_label)} (blended, all traffic)" if blended
+                else f"Cost / {_singular(kpi_label)}")
     return label
 
 
@@ -285,6 +344,11 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
     if tier == "outcome" and not measured:     # no measured series → fall back to claimed/CPA
         rag_keys = ["cpa" if k == "cost_per_key_event" else k for k in rag_keys]
         vol_keys = ["conversions" if k == "key_events" else k for k in vol_keys]
+    # non-paid rows contribute outcomes → the national ratio blends organic outcomes
+    # under paid spend; labels must say so (vs the tile row's paid-only cost)
+    nonpaid = weekly[~weekly["channel"].isin(_paid_channels(weekly))]
+    blended = bool(measured and "key_events" in nonpaid.columns
+                   and float(nonpaid["key_events"].fillna(0).sum()) > 0)
 
     def _prov(key: str, mode: str) -> str:
         if mode != "absolute":
@@ -306,7 +370,8 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
         if g is None:
             continue
         rag.append({"key": key,
-                    "label": _outcome_relabel(key, rec["label"], kpi_label, measured),
+                    "label": _outcome_relabel(key, rec["label"], kpi_label, measured,
+                                              blended=blended),
                     "value_str": _fmt(rec["value"], rec["format"]),
                     "provenance": _prov(key, g["mode"]), **g})
 
@@ -317,7 +382,8 @@ def tier_scorecard(weekly: pd.DataFrame, tier: str, targets: dict | None = None,
         if rec is None or pd.isna(rec["value"]) or float(rec["value"]) == 0.0:
             continue                           # unpopulated column → omit, don't show "0"
         val, vstr = float(rec["value"]), _fmt(rec["value"], rec["format"])
-        rec = {**rec, "label": _outcome_relabel(key, rec["label"], kpi_label, measured)}
+        rec = {**rec, "label": _outcome_relabel(key, rec["label"], kpi_label, measured,
+                                                blended=blended)}
         goal = (targets.get(key, {}) or {}).get("goal")
         if goal and goal > 0:
             scale = max(val, float(goal))
@@ -494,22 +560,33 @@ def pacing_insight(weekly: pd.DataFrame, budget: dict | None = None) -> dict | N
         pct_spent = total_spend / total_budget
         pct_elapsed = min(n_weeks / flight_weeks, 1.0)
         gap = pct_spent - pct_elapsed
+        complete = n_weeks >= flight_weeks
         if abs(gap) < 0.05:
             phrase, verdict = "on plan", "on_plan"
         else:
             phrase = (f"{abs(gap) * 100:.0f} points {'ahead of' if gap > 0 else 'behind'} "
                       "plan")
             verdict = "ahead" if gap > 0 else "behind"
-        title = f"Spend is pacing {phrase}"
-        narrative = (
-            f"**{_money(total_spend)}** of the **{_money(total_budget)}** budget is spent "
-            f"(**{pct_spent * 100:.0f}%**) with **{pct_elapsed * 100:.0f}%** of the "
-            f"{flight_weeks}-week flight elapsed. The current run rate is "
-            f"{_money(run_rate)}/week; at that pace the budget lands at "
-            f"{_money(run_rate * flight_weeks)} over the full flight.")
+        if complete:
+            # a finished flight gets a CLOSE-OUT read — projecting a run rate over a
+            # flight that already ended manufactures a phantom over/under-spend
+            title = f"The flight closed {phrase}"
+            narrative = (
+                f"The {flight_weeks}-week flight is complete: spend closed at "
+                f"**{_money(total_spend)}** against the **{_money(total_budget)}** plan "
+                f"(**{pct_spent * 100:.0f}%**). The final four weeks ran at "
+                f"{_money(run_rate)}/week.")
+        else:
+            title = f"Spend is pacing {phrase}"
+            narrative = (
+                f"**{_money(total_spend)}** of the **{_money(total_budget)}** budget is spent "
+                f"(**{pct_spent * 100:.0f}%**) with **{pct_elapsed * 100:.0f}%** of the "
+                f"{flight_weeks}-week flight elapsed. The current run rate is "
+                f"{_money(run_rate)}/week; at that pace the budget lands at "
+                f"{_money(run_rate * flight_weeks)} over the full flight.")
         out.update({"budget": {"total": total_budget, "flight_weeks": flight_weeks,
                                "pct_spent": pct_spent, "pct_elapsed": pct_elapsed,
-                               "verdict": verdict}})
+                               "verdict": verdict, "complete": complete}})
     else:
         title = (f"Spend is running at {_money(run_rate)}/week — "
                  f"{_money(total_spend)} over {n_weeks} weeks")
@@ -627,6 +704,128 @@ def audience_callout_insight(hist: pd.DataFrame) -> dict | None:
         "title": title, "narrative": narrative, "per_audience": per,
         "best": best.to_dict(), "worst": worst.to_dict(), "mult": mult,
     }
+
+
+# ---------------------------------------------------------------- recruiting pipeline
+# The post-submission applicant gates, in portal-tracker order. REPORTING layer only:
+# the stages are selection-driven and lag media by months — never a modeling target.
+PIPELINE_STAGE_ORDER = ["initial_screening", "meet_greet", "testing",
+                        "conditional_offer", "background_investigation", "final_offer"]
+PIPELINE_STAGE_LABELS = {
+    "initial_screening": "Initial screening",
+    "meet_greet": "Meet & greet",
+    "testing": "Testing",
+    "conditional_offer": "Conditional offer",
+    "background_investigation": "Background investigation",
+    "final_offer": "Final offer",
+}
+
+PIPELINE_CENSOR_NOTE = ("Pipeline still maturing: final offers completing now stem "
+                        "from applications submitted ~9–12 months ago, so recent "
+                        "cohorts under-count at the later gates.")
+
+
+def recruiting_pipeline_insight(stages: pd.DataFrame | None) -> dict | None:
+    """The 6-stage post-submission applicant funnel (CRM/ATS calendar-week counts).
+
+    ``stages`` is the frame from ``utils.load_pipeline_stages`` (date, stage, count,
+    optionally geo/initiative/channel). Returns None when absent/empty — the block
+    simply doesn't render on engagements without an applicant pipeline.
+
+    Honesty rules baked in: counts are calendar-week totals (not one cohort), the
+    right-censoring is stated, and the narrative draws the MMM boundary — media buys
+    applications; it cannot pass a polygraph.
+    """
+    if stages is None or len(stages) == 0 or "stage" not in stages.columns:
+        return None
+    per = stages.groupby("stage")["count"].sum()
+    order = [s for s in PIPELINE_STAGE_ORDER if s in per.index and per[s] > 0]
+    if len(order) < 2:
+        return None
+    rows = []
+    prev_stage, prev_val = None, None
+    for s in order:
+        v = float(per[s])
+        rate = (v / prev_val) if prev_val else float("nan")
+        rows.append({"stage": s, "label": PIPELINE_STAGE_LABELS.get(s, s),
+                     "value": v, "from": prev_stage, "step_rate": rate})
+        prev_stage, prev_val = s, v
+    df = pd.DataFrame(rows)
+
+    first, last = df.iloc[0], df.iloc[-1]
+    overall = last["value"] / first["value"] if first["value"] else float("nan")
+    steps = df.dropna(subset=["step_rate"])
+    hardest = steps.loc[steps["step_rate"].idxmin()] if len(steps) else None
+
+    title = (f"Selection does the filtering: {overall * 100:.0f}% of screened "
+             f"applicants have cleared every gate to a final offer")
+    co = df.set_index("stage")["value"].get("conditional_offer")
+    co_bit = f"**{co:,.0f}** conditional offers and " if co is not None else ""
+    narrative = (
+        f"Beyond the media funnel, the CRM has recorded **{first['value']:,.0f}** "
+        f"applicants entering {first['label'].lower()}, {co_bit}"
+        f"**{last['value']:,.0f}** final offers to date. ")
+    if hardest is not None:
+        narrative += (
+            f"The steepest gate is **{hardest['label']}**, which only "
+            f"**{hardest['step_rate'] * 100:.0f}%** of "
+            f"{PIPELINE_STAGE_LABELS.get(hardest['from'], str(hardest['from'])).lower()} "
+            "candidates clear. ")
+    narrative += (
+        f"_{PIPELINE_CENSOR_NOTE} Counts are calendar-week CRM totals, so "
+        "stage-to-stage rates compare everyone clearing each gate in the window, not a "
+        "single cohort._ **Media buys applications; it cannot pass a polygraph** — these "
+        "gates are selection outcomes, reported for context and never attributed to "
+        "media.")
+    return {"title": title, "narrative": narrative, "stages": df,
+            "overall_rate": overall, "censor_note": PIPELINE_CENSOR_NOTE}
+
+
+def applicant_quality_insight(stages: pd.DataFrame | None,
+                              min_screened: int = 500) -> dict | None:
+    """Applicant QUALITY by last-touch channel: what share of each channel's screened
+    applicants clear the FIRST gate (initial screening → meet & greet).
+
+    First gate only, deliberately: it has the shortest lag from submission, so it is
+    the least right-censored stage — later gates under-count recent cohorts unevenly
+    and would misread as channel differences. Channels below ``min_screened`` screened
+    applicants are excluded (a 5% rate on 155 people is noise, not signal).
+
+    HONESTY: the channel column is the CRM's LAST-TOUCH attribution — descriptive,
+    never causal, and never a media-performance verdict. Quality of who applies is a
+    selection observation, not something to grade media on.
+    """
+    if stages is None or len(stages) == 0 or "channel" not in stages.columns:
+        return None
+    s = stages[stages["stage"].isin(["initial_screening", "meet_greet"])]
+    if s.empty:
+        return None
+    pv = (s.groupby(["channel", "stage"])["count"].sum().unstack("stage"))
+    if not {"initial_screening", "meet_greet"}.issubset(pv.columns):
+        return None
+    pv = pv[pv["initial_screening"] >= float(min_screened)].copy()
+    if len(pv) < 2:
+        return None
+    pv["survival"] = pv["meet_greet"] / pv["initial_screening"]
+    pv = (pv.reset_index().rename(columns={"initial_screening": "screened",
+                                           "meet_greet": "advanced"})
+            .sort_values("survival", ascending=False).reset_index(drop=True))
+    best, worst = pv.iloc[0], pv.iloc[-1]
+    title = (f"{channel_label(best['channel'])} applicants clear initial screening at "
+             f"{best['survival'] * 100:.0f}% — {channel_label(worst['channel'])} at "
+             f"{worst['survival'] * 100:.0f}%")
+    narrative = (
+        "Share of each channel's screened applicants who clear the first gate "
+        "(initial screening → meet & greet): "
+        + ", ".join(f"**{channel_label(r['channel'])}** {r['survival'] * 100:.0f}% "
+                    f"({r['screened']:,.0f} screened)" for _, r in pv.iterrows())
+        + ". _Channel is the CRM's **last-touch** attribution — descriptive applicant "
+        "quality, not causal media credit; channels with fewer than "
+        f"{min_screened:,} screened applicants are excluded. Only the first gate is "
+        "compared: later gates lag submission by months, so recent cohorts would "
+        "under-count unevenly._")
+    return {"title": title, "narrative": narrative, "per_channel": pv,
+            "min_screened": min_screened}
 
 
 # ---------------------------------------------------------------- macro slot (hidden)

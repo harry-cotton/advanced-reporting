@@ -7,19 +7,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from advanced_reporting.utils import load_config
+from advanced_reporting.utils import load_config, load_pipeline_stages
 from advanced_reporting.ingestion.csv_source import CSVSource
 from advanced_reporting.transform.clean import (
     load_history, clean_ad_data, to_weekly, to_weekly_geo, channel_metrics,
-    build_modeling_table, data_quality_report, data_quality_markdown)
+    merge_pipeline_stages, build_modeling_table, build_modeling_table_geo,
+    data_quality_report, data_quality_markdown)
 from advanced_reporting.mmm.factory import get_engine
 from advanced_reporting.reporting.charts import plot_all
 from advanced_reporting.reporting.commentary import generate_commentary
 
 
-def run(lens=None, sources=None, no_mmm=False):
+def run(lens=None, sources=None, no_mmm=False, engine=None):
     cfg = load_config()
     m, rep = cfg["modeling"], cfg["reporting"]
+    if engine:                       # CLI override, e.g. --engine meridian (a ~5-min MCMC)
+        m = {**m, "engine": engine}
     q = cfg.get("quality", {})
     outdir = ROOT / rep["output_dir"]
     proc = ROOT / "data" / "processed"
@@ -42,7 +45,10 @@ def run(lens=None, sources=None, no_mmm=False):
 
     # No business-KPI series -> no MMM: descriptive mode (dashboard + non-causal
     # commentary). The KPI (e.g. CRM matchback) is what unlocks incrementality.
-    kpi_path = ROOT / "data/raw/business_kpi_weekly.csv"
+    # KPI path is configurable (data.kpi_path) so a self-contained dataset folder can hold
+    # its own CRM matchback; defaults to data/raw/business_kpi_weekly.csv.
+    kpi_rel = cfg.get("data", {}).get("kpi_path") or "data/raw/business_kpi_weekly.csv"
+    kpi_path = Path(kpi_rel) if Path(kpi_rel).is_absolute() else ROOT / kpi_rel
     if not no_mmm and not kpi_path.exists():
         print(f"  {kpi_path.name} not found -> descriptive mode (no MMM)")
         no_mmm = True
@@ -52,6 +58,9 @@ def run(lens=None, sources=None, no_mmm=False):
     ad_clean, creport = clean_ad_data(ad_raw)
     weekly = to_weekly(ad_clean)                         # national (sum geos)
     weekly_geo = to_weekly_geo(ad_clean)                 # geo x weekly (long)
+    # post-submission pipeline volumes (reporting-only counts; never a model input)
+    stages = load_pipeline_stages(cfg, ROOT)
+    weekly = merge_pipeline_stages(weekly, stages)
     channel_metrics(weekly).to_csv(proc / "channel_weekly_metrics.csv", index=False)
     weekly_geo.to_csv(proc / "modeling_table_geo.csv", index=False)
 
@@ -77,11 +86,24 @@ def run(lens=None, sources=None, no_mmm=False):
                                         m["control_cols"], m["target"])
         model_df.to_csv(proc / "modeling_table.csv", index=False)
 
-        # 3. MODEL (engine selected in config)
-        engine = get_engine(m["engine"], train_frac=m.get("train_frac", 0.85),
-                            adstock_max_lag=m.get("adstock_max_lag", 8))
-        result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
-                            m["target"], m["date_col"])
+        # 3. MODEL (engine selected in config). Meridian is geo-level: it needs the
+        #    geo x weekly table (cross-geo variation is its identifying signal); the
+        #    baseline engine models the national wide table.
+        if m["engine"] == "meridian":
+            engine = get_engine("meridian", **(m.get("meridian") or {}))
+            geo_df = build_modeling_table_geo(
+                weekly_geo, kpi, m["channel_spend_cols"], m["target"], m["date_col"],
+                populations=cfg.get("data", {}).get("geo_populations"))
+            geo_df.to_csv(proc / "modeling_table_geo_kpi.csv", index=False)
+            print(f"  meridian: geo x weekly fit — {geo_df['geo'].nunique()} geos x "
+                  f"{geo_df['date'].nunique()} weeks (this runs MCMC; minutes, not seconds)")
+            result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
+                                m["target"], m["date_col"], geo_df=geo_df)
+        else:
+            engine = get_engine(m["engine"], train_frac=m.get("train_frac", 0.85),
+                                adstock_max_lag=m.get("adstock_max_lag", 8))
+            result = engine.fit(model_df, m["channel_spend_cols"], m["control_cols"],
+                                m["target"], m["date_col"])
         result.channel_summary.to_csv(outdir / "channel_summary.csv", index=False)
         result.contributions.to_csv(outdir / "contributions.csv", index=False)
         (outdir / "fit_metrics.json").write_text(json.dumps(result.fit_metrics, indent=2),
@@ -90,6 +112,11 @@ def run(lens=None, sources=None, no_mmm=False):
         # curves + actual-vs-predicted. Engine-agnostic — Meridian writes the same shape.
         (outdir / "mmm_result.json").write_text(json.dumps({
             "engine": result.engine, "target": m["target"],
+            # count vs currency target + the client band drive the Incrementality page's
+            # verdict logic (cost-per-incremental-outcome for counts, ROI-vs-1.0 for currency)
+            "target_kind": m.get("target_kind", "currency"),
+            "cost_per_outcome_target": m.get("cost_per_outcome_target"),
+            "kpi_label": rep.get("kpi_label"),
             "fit_metrics": result.fit_metrics, "params": result.params,
             "response_curves": {ch: {"spend": list(c["spend"]),
                                      "response": list(c["response"]),
@@ -102,7 +129,10 @@ def run(lens=None, sources=None, no_mmm=False):
         # 4. REPORT
         charts = plot_all(result, outdir)
         (outdir / "commentary.md").write_text(
-            generate_commentary(result, creport, m["target"]), encoding="utf-8")
+            generate_commentary(result, creport, m["target"],
+                                target_kind=m.get("target_kind", "currency"),
+                                cost_band=m.get("cost_per_outcome_target"),
+                                kpi_label=rep.get("kpi_label")), encoding="utf-8")
 
         # 5. VALIDATE vs known ground truth (synthetic runs only; no-op on real data)
         from advanced_reporting.mmm.validation import validate_run
@@ -151,7 +181,9 @@ if __name__ == "__main__":
     _ap.add_argument("--no-mmm", action="store_true",
                      help="descriptive mode: dashboard tables + non-causal commentary, "
                           "no MMM (automatic when business_kpi_weekly.csv is absent)")
+    _ap.add_argument("--engine", default=None, choices=["baseline", "meridian"],
+                     help="override modeling.engine for this run (meridian runs MCMC, minutes)")
     _a = _ap.parse_args()
     run(lens=_a.lens,
         sources=[s.strip() for s in _a.sources.split(",")] if _a.sources else None,
-        no_mmm=_a.no_mmm)
+        no_mmm=_a.no_mmm, engine=_a.engine)

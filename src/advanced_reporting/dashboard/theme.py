@@ -71,9 +71,14 @@ CHANNEL_COLORS = {
     "linkedin": "#4A90B8",
     "tiktok": "#3A3A3A",
     "display": "#2A9D8F",       # teal
-    "email": "#4E79A7",         # slate blue
+    "ctv": "#5E6FA3",           # indigo (distinct from meta's violet)
+    "audio": "#77803B",         # olive
+    "jobboards": "#8C6D3F",     # bronze (muted — never the claimed amber)
     "youtube": "#C15C4E",       # terracotta
+    # non-paid rows keep quiet gray-family hues so paid identities carry the charts
+    "email": "#9C93A8",         # gray-lavender (was slate blue — clashed w/ google_search)
     "organic_search": "#8A8F98",
+    "social_organic": "#7E8A80",  # green-gray
     "direct": "#B9B2A6",
 }
 # Deterministic fallback ramp for unmapped channels — picked by a stable hash of the
@@ -117,6 +122,7 @@ _NAV_PAGES = [
     ("Exec Summary", "app.py",                 "story"),
     ("Channels",     "pages/1_Channels.py",    "story"),
     ("Audiences",    "pages/2_Audiences.py",   "story"),
+    ("Geography",    "pages/6_Geography.py",   "story"),
     ("Incrementality", "pages/5_Results.py",   "story"),
     ("Data Quality", "pages/3_Data_Quality.py", "tools"),
     ("Explore",      "pages/4_Explore.py",      "tools"),
@@ -257,6 +263,23 @@ def ai_block(md: str) -> None:
         f'<div style="background:{PAPER_TINT};border:1px solid {GRID};border-radius:8px;'
         f'padding:0.5rem 1.3rem 1rem">{"".join(out)}</div>',
         unsafe_allow_html=True)
+
+
+def ai_aside(text: str) -> None:
+    """A QUIET woven AI paragraph under a chart: tinted, chip-labeled, clearly set
+    apart from the deterministic prose above it. For the standalone summary use
+    ``ai_block``; this is the inline form."""
+    st.markdown(
+        f'<div style="background:{PAPER_TINT};border-left:3px solid {GRID};'
+        f'border-radius:0 8px 8px 0;padding:0.55rem 0.9rem;margin:0.35rem 0 0.2rem">'
+        f'<span style="font-family:{SANS};font-size:0.62rem;font-weight:700;'
+        f'letter-spacing:0.08em;text-transform:uppercase;color:{INK_SOFT};'
+        f'background:{PAPER};border:1px solid {GRID};border-radius:999px;'
+        f'padding:0.1rem 0.5rem;margin-right:0.5rem;vertical-align:middle">AI read</span>'
+        f'<span style="font-family:{SANS};font-size:0.9rem;color:{INK_SOFT};'
+        f'line-height:1.5">{_html_inline(text)}</span></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _delta_html(delta: str | None, delta_color: str, size: str = "0.82rem") -> str:

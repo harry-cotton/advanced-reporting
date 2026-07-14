@@ -20,8 +20,11 @@ from ..utils import project_root
 TIERS = ("reach", "intent", "outcome")
 
 # Base quantities a formula may reference (summed over the grouping).
+# conditional_offers / final_offers are post-submission pipeline VOLUMES (CRM calendar-
+# week counts) — counts only, never a cost denominator (the gates lag media by months).
 BASE_INPUTS = ("spend", "impressions", "clicks", "conversions", "platform_revenue",
-               "sessions", "engaged_sessions", "page_views", "video_views", "key_events")
+               "sessions", "engaged_sessions", "page_views", "video_views", "key_events",
+               "conditional_offers", "final_offers")
 
 _VALID_FORMATS = ("count", "currency", "pct", "ratio")
 

@@ -23,18 +23,28 @@ web_analytics_sources: [ga4]
 # distinguish Search from Demand Gen; the campaign name can.
 ga4_export:
   campaign_channel_overrides:
+    # Only needed to split ambiguous 'google / cpc' traffic by campaign name. Keep these
+    # SPECIFIC: a broad key like 'Display' would wrongly capture any campaign whose name
+    # contains it (e.g. the FBI grammar's US_DISPLAY_* campaigns, whose GA4 source/medium
+    # 'google / display' already resolves cleanly). Add keys only for real ambiguity.
     DemandGen: google_demandgen
-    Display: google_demandgen
   source_medium_channels:
     google / cpc: google_search
+    youtube / cpc: youtube
     facebook / paid_social: meta
     facebook / cpc: meta
     instagram / paid_social: meta
     linkedin / paid_social: linkedin
     linkedin / cpc: linkedin
+    google / display: display
+    ctv / video: ctv
+    audio / audio: audio
+    jobboards / referral: jobboards
     google / organic: organic_search
     bing / organic: organic_search
     (direct) / (none): direct
+    email / newsletter: email
+    social / organic: social_organic
 
 channel_aliases:
   facebook: meta
@@ -56,6 +66,20 @@ channel_aliases:
   linked_in: linkedin
   linkedin: linkedin
   meta: meta
+  youtube: youtube
+  you_tube: youtube
+  ctv: ctv
+  connected_tv: ctv
+  audio: audio
+  jobboards: jobboards
+  job_boards: jobboards
+  display: display
+  programmatic: display
+  organic_search: organic_search
+  organic: organic_search      # bare CRM/analytics "organic" bucket -> canonical key
+  direct: direct
+  email: email
+  social_organic: social_organic
 
 sources:
   # Synthetic CSV already uses canonical column names -> identity map (no behavior change).
@@ -108,6 +132,19 @@ sources:
     clicks: clicks
     externalWebsiteConversions: conversions
     conversionValueInLocalCurrency: platform_revenue
+
+  # Generic campaign-grain CSV (display / ctv / audio / jobboards) — columns are already
+  # canonical, so this is an identity map. geo + currency are read straight from the file.
+  campaign_delivery:
+    date: date
+    channel: channel
+    campaign: campaign
+    geo: geo
+    spend: spend
+    impressions: impressions
+    clicks: clicks
+    conversions: conversions
+    currency: currency
 
   # GA4 (Google Analytics 4) Data API -- mid-funnel ENGAGEMENT, no spend. GA4 keys on UTM:
   # channel is derived from sessionSource (+ sessionMedium) via channel_aliases; geo from the

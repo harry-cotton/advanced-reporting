@@ -31,17 +31,29 @@ caps:
   max_creatives_per_audience: 3
 
 # Audience library, keyed by goal. The planner draws audiences from here (never invents them).
+# The FBI recruiting entries (appended) dogfood the naming grammar for the FBI engagement;
+# they trail the generic entries so the deterministic first-N selection is unchanged.
 audience_library:
   awareness:
     - {audience_type: PROSPECT, audience_detail: BROAD, placement: FEED}
     - {audience_type: PROSPECT, audience_detail: INT-CATEGORY, placement: FEED}
     - {audience_type: PROSPECT, audience_detail: LAL-1PCT, placement: FEED}
+    # -- FBI recruiting prospecting audiences --
+    - {audience_type: PROSPECT, audience_detail: INT-LAW, placement: FEED}
+    - {audience_type: PROSPECT, audience_detail: VET-MIL, placement: FEED}
+    - {audience_type: PROSPECT, audience_detail: STEM-GRAD, placement: FEED}
+    - {audience_type: PROSPECT, audience_detail: LANG-ARA, placement: FEED}
+    - {audience_type: PROSPECT, audience_detail: CAMPUS, placement: FEED}
   consideration:
     - {audience_type: ENGAGED, audience_detail: SITE-VISIT-30D, placement: FEED}
     - {audience_type: ENGAGED, audience_detail: VIDEO-VIEW-50, placement: REELS}
   conversion:
     - {audience_type: RETARGET, audience_detail: CART-ABANDON, placement: FEED}
     - {audience_type: RETARGET, audience_detail: PDP-VIEW-30D, placement: FEED}
+    # -- FBI recruiting retargeting audiences --
+    - {audience_type: RETARGET, audience_detail: SITE-90D, placement: FEED}
+    - {audience_type: RETARGET, audience_detail: ENGAGE-30D, placement: FEED}
+    - {audience_type: RETARGET, audience_detail: ABANDON-APP, placement: FEED}
 
 # goal -> funnel objective + the channels that lead at that stage. Goals match
 # config/campaign_goals.yaml (awareness/consideration/conversion).
@@ -56,16 +68,25 @@ funnel:
     objective: CONVERT
     lead_channels: [google_search, google_pmax, meta]
 
-# Creative-angle library, keyed by objective.
+# Creative-angle library, keyed by objective. FBI recruiting creatives (appended) trail
+# the generic entries so the deterministic first-N selection is unchanged.
 creatives:
   AWARENESS:
     - {creative: BRANDHERO, format: VID, size: 9x16}
+    # -- FBI recruiting creatives --
+    - {creative: HERO, format: VID, size: 16x9}
+    - {creative: DAYINLIFE, format: VID, size: 9x16}
   CONSIDER:
     - {creative: BRANDHERO, format: VID, size: 9x16}
     - {creative: HOWITWORKS, format: STATIC, size: 1x1}
+    # -- FBI recruiting creatives --
+    - {creative: TESTIM-AGENT, format: VID, size: 16x9}
+    - {creative: MISSION-STAT, format: STATIC, size: 1x1}
   CONVERT:
     - {creative: SUMMERSALE, format: STATIC, size: 1x1}
     - {creative: SUMMERSALE, format: VID, size: 9x16}
+    # -- FBI recruiting creatives --
+    - {creative: MISSION-STAT, format: STATIC, size: 1x1}
 
 brand_safety:
   blocked_placements: []          # placements that must never appear in a plan
@@ -81,7 +102,7 @@ llm:
 naming:
   generator_path: naming/naming_generator.py
   plan_columns: [market, channel, objective, audience_type, audience_detail,
-                 creative, format, size, placement, version]
+                 creative, format, size, placement, version, initiative]
   default_scheme:
     - [Campaign, "market, channel, objective, audience_type", "_"]
     - [Ad Set, "audience_type, audience_detail, placement", "_"]
