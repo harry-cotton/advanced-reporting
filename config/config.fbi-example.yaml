@@ -1,0 +1,160 @@
+# FBI Talent Acquisition engagement config — COMMITTED SNAPSHOT (contains no secrets;
+# API keys live in .env / the environment, never here). The LIVE config is
+# config/config.yaml (gitignored). Fresh machine:
+#     copy config\config.fbi-example.yaml config\config.yaml
+# Full bring-up: docs/WORK_MACHINE_SETUP.md
+project:
+  name: Advanced Reporting
+  currency: USD
+
+data:
+  # optional: restrict the pipeline to specific extraction sources (see the `source`
+  # column stamped by the store), e.g. [google_ads, meta_ads, linkedin_ads, ga4].
+  # null = use everything in the store. CLI --sources overrides.
+  sources: null   # FBI Talent Acquisition engagement — ONE dataset in the store, every page ties out
+  source: synthetic          # active ad source: synthetic | csv | supermetrics |
+                             #   google_ads | meta | tiktok | linkedin (see ingestion/factory.py)
+  # The FBI CRM matchback (submitted applications) lives in the self-contained dataset folder.
+  kpi_path: "data/MMM Data/business_kpi_weekly.csv"
+  # Post-submission applicant-pipeline stage counts (ATS export shape). Reporting layer
+  # ONLY — the gates lag media by months and are selection-driven, never a model input.
+  pipeline_stages_path: "data/MMM Data/crm_pipeline_stages.csv"
+  # Display names for the engagement's geo codes (Geography page + prose).
+  geo_labels:
+    US-NE: Northeast
+    US-MA: Mid-Atlantic
+    US-SE: Southeast
+    US-GL: Great Lakes
+    US-MW: Midwest
+    US-SC: South Central
+    US-MTN: Mountain
+    US-PNW: Pacific Northwest
+    US-PSW: Pacific Southwest
+    US-NCA: Northern California
+  # Region -> member US states, for the Geography page's national heat map. A state
+  # listed under TWO regions (CA: Pacific Southwest + Northern California) renders as
+  # their combined value with both names in the hover — states can't be split.
+  geo_states:
+    US-NE: [ME, NH, VT, MA, RI, CT]
+    US-MA: [NY, NJ, PA, DE, MD, DC, VA, WV]
+    US-SE: [NC, SC, GA, FL, AL, MS, TN, KY]
+    US-GL: [OH, MI, IN, IL, WI]
+    US-MW: [MN, IA, MO, ND, SD, NE, KS]
+    US-SC: [TX, OK, AR, LA]
+    US-MTN: [CO, UT, NV, AZ, NM, WY, MT, ID]
+    US-PNW: [WA, OR, AK]
+    US-PSW: [CA, HI]
+    US-NCA: [CA]
+  # Per-geo population weights (census-ish) — Meridian scales geo effects by population.
+  geo_populations:
+    US-NE: 0.11
+    US-MA: 0.13
+    US-SE: 0.13
+    US-GL: 0.11
+    US-MW: 0.08
+    US-SC: 0.12
+    US-MTN: 0.06
+    US-PNW: 0.07
+    US-PSW: 0.12
+    US-NCA: 0.07
+  geos:                      # synthetic-only: a handful of geos to emit
+    - US-NE
+    - US-MW
+    - US-W
+  start: "2024-07-01"        # fixed extraction window (ISO) for deterministic, reproducible
+  end: "2026-06-28"          #   pulls; override per-run with `ingest.py --start/--end`
+  raw_dir: data/raw
+  processed_dir: data/processed
+  sample_file: data/raw/sample_campaigns.csv
+
+modeling:
+  engine: meridian            # Meridian validated 2026-07-13 (beats baseline on this
+                              # engagement); "baseline" remains the no-deps fallback.
+                              # NB: a pipeline run now fits MCMC — minutes, manual only.
+  target: submitted_applications   # the MMM target: weekly CRM-matchback SUBMITTED applications (a count)
+  target_kind: count          # count (not currency) — verdicts grade cost-per-incremental-application (P3)
+  date_col: date
+  channel_spend_cols:         # media channels (spend) to model — the 8 FBI paid channels
+    - google_search
+    - youtube
+    - meta
+    - linkedin
+    - ctv
+    - display
+    - jobboards
+    - audio
+  control_cols:               # non-media drivers (emitted alongside the CRM KPI)
+    - unemployment_index
+    - news_spike_flag
+  cost_per_outcome_target:    # count-target verdict band ($/incremental application) — P3
+    good: 400
+    warn: 650
+  adstock_max_lag: 8
+  train_frac: 0.85
+  # Google Meridian sampler settings (only used when engine: meridian). MCMC runs for
+  # minutes on CPU — manual/local only, CI never fits Meridian. knots < n_weeks keeps the
+  # geo model identifiable; holdout_frac is the held-out tail for honest out-of-sample R².
+  meridian:
+    n_chains: 4
+    n_adapt: 500
+    n_burnin: 500
+    n_keep: 1000
+    knots: 20
+    holdout_frac: 0.15
+
+quality:
+  spike_factor: 3.0           # flag a week if channel x geo spend > N x the prior week
+  fill_freq: W-MON            # calendar grain for gap-filling missing weeks
+
+agent:
+  # The report-spec agent (scripts/advise.py --spec). Runs at PIPELINE TIME only —
+  # sends system/ knowledge + compact computed summaries (never raw rows) to the
+  # model API. Set enabled: false for engagements whose confidentiality terms
+  # forbid third-party processing (see system/context/client_brief.template.md).
+  enabled: true
+  model: claude-sonnet-5
+
+reporting:
+  output_dir: outputs
+  # Label for the analytics-measured outcome in dashboard prose. FBI engagement: the GA4
+  # key event is an application start on the Bureau's careers portal.
+  kpi_label: application starts
+  # Client-report cover + audience mode (see config.example.yaml). FBI Talent
+  # Acquisition engagement — clearly-fictional cover names for the synthetic dataset.
+  # report_audience: client (default) ships the client-safe report (no analyst watch
+  # flags, confidence-framed commentary).
+  client_name: Federal Bureau of Investigation — Talent Acquisition
+  campaign_name: Omnichannel Recruiting FY24–26
+  report_audience: client
+  # Show the AI-drafted commentary section (outputs/commentary_ai.md, written by
+  # scripts/advise.py --commentary) on the Overview. OFF by default: the
+  # deterministic narrative blocks remain the spine; the AI section is clearly
+  # stamped and number-guarded, but a human reviews it before a client sees it.
+  ai_commentary: true   # recruitment test: show the stamped AI section
+  # Spend plan for the Overview pacing block — the FBI flight: ~$15M/yr paid media
+  # across FY24–26, 131 complete weeks (Mon 2024-01-01 → Sun 2026-07-05).
+  budget:
+    total: 37500000            # planned paid-media spend for the full flight
+    flight_weeks: 131          # flight length in weeks
+  # Optional goal thresholds for the tier scorecard's bullet gauges (Exec Summary).
+  # Per metric key (see config/metrics.yaml):
+  #   goal        : target value — turns a volume metric into a pacing bar (else totals grid)
+  #   good / warn : RAG thresholds for efficiency/quality metrics. Direction follows the
+  #                 metric's higher_is_better: for costs (lower=better) good <= warn; for
+  #                 rates (higher=better) good >= warn.
+  # Any metric with no entry falls back to bands derived from the channel spread (labeled
+  # as such) — no faked absolute target. Mirrors the Power BI "Goals" table.
+  # Client-set band for the cost of a GA4-measured application START (the in-window
+  # efficiency yardstick; the $400/$650 modeling band grades cost per INCREMENTAL
+  # submitted application — different denominators, deliberately different bands).
+  targets:
+    cost_per_key_event: {good: 160, warn: 220}
+  # other examples:
+  #   impressions: {goal: 700000000}
+  #   cpm: {good: 2.0, warn: 4.0}
+  #   ctr: {good: 0.012, warn: 0.006}
+  # DEFERRED "External context" aside on the Overview: curated per-client notes
+  # only (one bullet per line), never generated content. Hidden until enabled.
+  macro_context:
+    enabled: false
+    notes_file: config/macro_notes.md
