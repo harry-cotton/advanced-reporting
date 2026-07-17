@@ -24,7 +24,9 @@ import matplotlib
 import pandas as pd
 
 matplotlib.use("Agg")
+import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.ticker import FuncFormatter  # noqa: E402
 
 from ..agent.commentary_agent import STAMP, load_active_commentary  # noqa: E402
 from ..agent.recommendations import eligible_recommendations  # noqa: E402
@@ -111,6 +113,43 @@ def _chart_trend(series: pd.DataFrame) -> str:
     _style_axes(ax)
     ax.set_xlabel("")
     return _img(_fig_to_b64(fig), "Outcome trend, paid vs organic & direct")
+
+
+def _chart_combo(mo: pd.DataFrame, kpi_label: str) -> str:
+    """The exec hero: monthly paid spend (bars) + cost per measured outcome (line).
+
+    Mirrors the dashboard's ``theme.combo`` mono grammar — graphite volume bars +
+    near-ink efficiency line — so amber keeps meaning "platform-claimed" and never
+    leaks onto spend. Months with no measured outcomes carry a NaN cost, which
+    matplotlib renders as a gap in the line (never a fake zero).
+    """
+    fig, ax = plt.subplots(figsize=(7.2, 3.0))
+    ax.bar(mo["month"], mo["spend"], width=20, color=theme.SPEND,
+           label="Monthly spend")
+    ax.set_ylabel("Spend", color=theme.INK_SOFT, fontsize=9)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    _style_axes(ax)
+    ax2 = ax.twinx()
+    one = _singular(kpi_label)
+    ax2.plot(mo["month"], mo["cost_per"], color=theme.EFFICIENCY, linewidth=1.8,
+             marker="o", markersize=3.5, label=f"Cost / {one}")
+    ax2.set_ylabel(f"Cost / {one}", color=theme.INK_SOFT, fontsize=9)
+    ax2.set_ylim(bottom=0)
+    ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_color(theme.GRID)
+    ax2.tick_params(colors=theme.INK_SOFT, labelsize=9)
+    locator = mdates.AutoDateLocator()
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    # horizontal legend above the plot (the dashboard's plotly convention) so it
+    # never collides with the line's peaks
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, frameon=False, fontsize=9, ncol=2,
+              loc="lower left", bbox_to_anchor=(0, 1.0))
+    return _img(_fig_to_b64(fig),
+                f"Monthly spend and cost per {one} over the flight")
 
 
 def _chart_pipeline(stages: pd.DataFrame) -> str:
@@ -268,11 +307,31 @@ def _section(title: str, body_html: str) -> str:
     return f'<section><h2>{html.escape(title)}</h2>\n{body_html}</section>'
 
 
+def _delta_class(delta: str, delta_color: str) -> str:
+    """CSS classes for a tile delta: direction (arrow) + sentiment (colour).
+
+    Sentiment follows the tile's ``delta_color`` polarity from ``headline_tiles``
+    ("inverse" = costs, where down is good; "off" = no verdict, e.g. spend — up or
+    down is context, not news). Direction and sentiment are separate classes so a
+    falling cost renders a down arrow in green, never sign-coloured naively.
+    """
+    s = delta.lstrip()
+    up, down = s.startswith("+"), s.startswith(("-", "−"))
+    cls = "delta" + (" up" if up else " down" if down else "")
+    if delta_color == "normal":
+        cls += " good" if up else " bad" if down else ""
+    elif delta_color == "inverse":
+        cls += " bad" if up else " good" if down else ""
+    return cls
+
+
 def _tiles_html(tiles: list[dict]) -> str:
     cells = []
     for t in tiles:
-        delta = (f'<div class="delta">{html.escape(t["delta"])}</div>'
-                 if t.get("delta") else "")
+        delta = ""
+        if t.get("delta"):
+            cls = _delta_class(t["delta"], t.get("delta_color", "off"))
+            delta = f'<div class="{cls}">{html.escape(t["delta"])}</div>'
         cells.append(
             f'<div class="tile"><div class="tile-label">{html.escape(t["label"])}'
             f'</div><div class="tile-value">{html.escape(t["value"])}</div>'
@@ -447,6 +506,17 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
 
     # --- surrounding matter --------------------------------------------------------
     tiles = _tiles_html(insights.headline_tiles(weekly, kpi_label))
+    # the exec hero: spend x cost-per combo, pinned after the tile row (same slot as
+    # the dashboard Overview); absent when there's no measured series or < 3 months.
+    hero = ""
+    eff = insights.spend_efficiency_trend(weekly, kpi_label)
+    if eff:
+        hero = _section(
+            eff["title"],
+            _chart_combo(eff["monthly"], kpi_label)
+            + f'<p class="soft">Monthly paid spend (bars) with cost per '
+              f'analytics-measured {html.escape(_singular(kpi_label))} overlaid '
+              f'(line).</p>')
     lede = _md_to_html(insights.topline_summary(weekly, kpi_label))
     scorecard = _scorecard_html(insights.tier_scorecard(
         weekly, tier, targets=targets, kpi_label=kpi_label,
@@ -519,13 +589,21 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
     h3 {{ font-size: 1.02rem; margin: 18px 0 6px; }}
     section {{ margin: 30px 0; padding-top: 18px; border-top: 1px solid {theme.GRID}; }}
     .soft {{ color: {theme.INK_SOFT}; font-size: 0.9rem; }}
-    .tiles {{ display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0; }}
-    .tile {{ flex: 1 1 140px; background: {theme.PAPER_TINT}; border-radius: 10px;
-            padding: 12px 14px; }}
-    .tile-label {{ font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase;
-                  color: {theme.INK_SOFT}; }}
-    .tile-value {{ font-size: 1.5rem; font-weight: 600; }}
-    .delta {{ font-size: 0.8rem; color: {theme.INK_SOFT}; }}
+    .tiles {{ display: flex; flex-wrap: wrap; gap: 14px; margin: 20px 0; }}
+    .tile {{ flex: 1 1 160px; background: {theme.PAPER}; border: 1px solid {theme.GRID};
+            border-top: 3px solid {theme.ACCENT}; border-radius: 12px;
+            padding: 14px 16px;
+            box-shadow: 0 1px 2px rgba(28,28,40,0.05), 0 5px 14px rgba(28,28,40,0.05); }}
+    .tile-label {{ font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+                  color: {theme.INK_SOFT}; font-weight: 600; }}
+    .tile-value {{ font-size: 2rem; font-weight: 650; line-height: 1.2;
+                  margin: 3px 0 2px; font-variant-numeric: tabular-nums;
+                  letter-spacing: -0.01em; }}
+    .delta {{ font-size: 0.8rem; color: {theme.INK_SOFT}; font-weight: 600; }}
+    .delta.up::before {{ content: "\\25B4 "; }}
+    .delta.down::before {{ content: "\\25BE "; }}
+    .delta.good {{ color: {theme.POSITIVE}; }}
+    .delta.bad {{ color: {theme.NEGATIVE}; }}
     .lede p {{ font-size: 1.05rem; }}
     table {{ border-collapse: collapse; width: 100%; font-size: 0.92rem; }}
     th, td {{ text-align: left; padding: 7px 10px; border-bottom: 1px solid {theme.GRID}; }}
@@ -563,6 +641,7 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
   {len(insights._paid_channels(weekly))} paid channels · {html.escape(method_line)}</p>
 </header>
 {tiles}
+{hero}
 <div class="lede">{lede}</div>
 {flags_html}
 {blocks_html}

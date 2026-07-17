@@ -7,7 +7,8 @@ import pandas as pd
 
 from advanced_reporting.agent import summaries as S
 from advanced_reporting.agent.commentary_agent import LOGIC_VERSION
-from advanced_reporting.reporting.html_report import REPORT_PATH, build_report
+from advanced_reporting.reporting.html_report import (REPORT_PATH, _delta_class,
+                                                      build_report)
 
 
 def _seed(root, with_spec=True, with_commentary=False, stale_commentary=False):
@@ -90,6 +91,38 @@ def test_report_excludes_stale_commentary(tmp_path):
     doc = build_report(tmp_path, audience="internal").read_text(encoding="utf-8")
     assert "The claim ratio is" not in doc          # stale body hidden
     assert "stale" in doc                           # with the visible note
+
+
+def test_delta_classes_are_polarity_aware():
+    """Direction (arrow) and sentiment (colour) are independent: a falling cost is a
+    down arrow in green — never sign-coloured naively (ui-ux-pro-max trial finding)."""
+    assert _delta_class("+14% vs prior 4 wks", "normal") == "delta up good"
+    assert _delta_class("-17% vs prior 4 wks", "inverse") == "delta down good"
+    assert _delta_class("+9% vs prior 4 wks", "inverse") == "delta up bad"
+    assert _delta_class("-4% vs prior 4 wks", "off") == "delta down"   # spend: no verdict
+    assert _delta_class("flat vs prior 4 wks", "normal") == "delta"
+
+
+def test_hero_combo_renders_with_enough_history(tmp_path):
+    """>= 3 months of measured data pins the spend x cost-per combo after the tiles;
+    the short 2-week fixture must omit it (spend_efficiency_trend returns None)."""
+    _seed(tmp_path, with_spec=False)
+    doc = build_report(tmp_path).read_text(encoding="utf-8")
+    assert "Monthly spend and cost per" not in doc   # 2 weeks: no hero
+
+    dates = pd.date_range("2026-01-05", periods=20, freq="W-MON")
+    pd.DataFrame({
+        "date": dates.repeat(2),
+        "channel": ["meta", "google_search"] * len(dates),
+        "spend": [5000.0, 3000.0] * len(dates),
+        "impressions": [500000.0, 60000.0] * len(dates),
+        "clicks": [6000.0, 2400.0] * len(dates),
+        "conversions": [400.0, 120.0] * len(dates),
+        "key_events": [100.0, 100.0] * len(dates),
+    }).to_csv(tmp_path / "data" / "processed" / "channel_weekly_metrics.csv",
+              index=False)
+    doc = build_report(tmp_path).read_text(encoding="utf-8")
+    assert "Monthly spend and cost per" in doc       # the combo's alt text
 
 
 def test_markdown_is_escaped_before_rendering(tmp_path):
