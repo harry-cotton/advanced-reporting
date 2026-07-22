@@ -127,6 +127,63 @@ def test_within_pull_key_collision_warns(tmp_path):
     df = _ad_rows([("2026-01-05", "meta", "MBA_Prospecting", 100.0),
                    ("2026-01-05", "meta", "MBA_Prospecting", 250.0)])  # no account ids
     store.write_pull(df, "meta_ads", raw_root=raw, stamp="20260106")
-    with pytest.warns(UserWarning, match="same-key"):
+    with pytest.warns(UserWarning, match="summed to grain"):
         manifest = _consolidate(tmp_path)
     assert manifest["pulls"][0]["dup_key_rows"] == 1
+    hist = pd.read_parquet(tmp_path / "history.parquet")
+    assert len(hist) == 1
+    assert hist["spend"].iloc[0] == 350.0     # SUMMED — keep-last kept 250.0 (data loss)
+
+
+def test_breakdown_export_collapses_by_sum_not_keeplast(tmp_path):
+    """The real-export lesson (Meta file: 16,719 of 17,215 rows lost, ~3% of spend
+    surfaced): an Age/Gender breakdown pull SUMS to grain and the breakdown columns
+    never leak into history."""
+    raw = tmp_path / "raw"
+    df = _ad_rows([("2026-01-05", "meta", "camp_a", 100.0),
+                   ("2026-01-05", "meta", "camp_a", 40.0),
+                   ("2026-01-05", "meta", "camp_a", 10.0),
+                   ("2026-01-06", "meta", "camp_a", 25.0)])
+    df["age"] = ["18-24", "25-34", "35-44", "18-24"]
+    df["gender"] = ["female", "male", "female", "male"]
+    store.write_pull(df, "meta_ads", raw_root=raw, stamp="20260107")
+    with pytest.warns(UserWarning, match="summed to grain"):
+        _consolidate(tmp_path)
+    hist = pd.read_parquet(tmp_path / "history.parquet")
+    assert len(hist) == 2                                  # one row per grain key
+    day1 = hist[hist["date"] == "2026-01-05"]
+    assert day1["spend"].iloc[0] == 150.0                  # 100+40+10, not keep-last 10
+    assert day1["impressions"].iloc[0] == 3000.0           # every additive metric sums
+    assert "age" not in hist.columns and "gender" not in hist.columns
+
+
+def test_collapse_preserves_nan_not_measured(tmp_path):
+    """Summing a breakdown must not fabricate 0.0 for metrics nobody measured: GA4-style
+    rows with NaN ad metrics keep NaN through the within-pull SUM (min_count=1)."""
+    raw = tmp_path / "raw"
+    ga4 = schema.to_canonical(pd.DataFrame({
+        "date": ["2026-01-05", "2026-01-05"], "channel": ["meta", "meta"],
+        "campaign": ["camp_a", "camp_a"],
+        "sessions": [400.0, 100.0], "engaged_sessions": [220.0, 30.0],
+    }), "ga4", load_mappings())
+    store.write_pull(ga4, "ga4", raw_root=raw, stamp="20260106")
+    with pytest.warns(UserWarning, match="summed to grain"):
+        _consolidate(tmp_path)
+    hist = pd.read_parquet(tmp_path / "history.parquet")
+    assert len(hist) == 1
+    assert hist["sessions"].iloc[0] == 500.0
+    assert pd.isna(hist["spend"].iloc[0])       # still "not measured", never 0.0
+
+
+def test_non_daily_export_is_refused_loudly(tmp_path):
+    """A pull whose dates mostly fail to parse (weekly/monthly rollups, 'Reporting
+    starts/ends' ranges) is refused whole — never silently ingested as the parseable
+    fragment after the dropna(date)."""
+    raw = tmp_path / "raw"
+    df = _ad_rows([("2026-01-01 - 2026-01-31", "meta", "camp_a", 100.0),
+                   ("2026-02-01 - 2026-02-28", "meta", "camp_a", 90.0)])
+    store.write_pull(df, "meta_ads", raw_root=raw, stamp="20260106")
+    with pytest.warns(UserWarning, match="non-daily"):
+        manifest = _consolidate(tmp_path)
+    assert len(pd.read_parquet(tmp_path / "history.parquet")) == 0
+    assert any("non-daily" in s["reason"] for s in manifest["skipped_pulls"])

@@ -50,8 +50,12 @@ store the pipeline reads from, so history grows over time. A second, forward pat
      `csv_source.py` reads local CSV exports via the schema/mappings.
    - `store.py` — durable raw store: `write_pull()` writes immutable, date-stamped CSVs under
      `data/raw/<source>/`; `consolidate()` merges **all** pulls into
-     `data/processed/history.parquet` (dedup grain `date,channel,campaign,geo`, keep latest;
-     incremental + idempotent) and writes a manifest.
+     `data/processed/history.parquet` (grain = `KEY_COLS` incl. ids + `source`; same-key rows
+     WITHIN one pull are **summed** — unmodeled Age/Gender/Device breakdowns aggregate away,
+     never keep-last data loss — while cross-pull dups keep latest = restatements; non-daily
+     pulls (>10% unparseable dates) are refused loudly; incremental + idempotent) and writes
+     a manifest. Robust messy-export ingestion (column synonyms, missing-optional tolerance,
+     config-driven generic reader for unknown platforms): `docs/plan-robust-ingestion.md`.
 2. **`transform/clean.py`** — reads `history.parquet`, **reuses `schema.py`** for validation
    (never re-implements the contract), standardizes channels (`config/mappings.yaml`), fixes
    negatives/missing/dupes, fills calendar gaps per channel×geo, then emits the national

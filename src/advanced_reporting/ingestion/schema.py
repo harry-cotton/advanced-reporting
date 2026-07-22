@@ -60,6 +60,7 @@ with defaults when a source omits them, so every existing ad source still valida
 """
 from __future__ import annotations
 import hashlib
+import re
 from dataclasses import dataclass
 
 import pandas as pd
@@ -121,6 +122,13 @@ CANONICAL_COLUMNS = tuple(c.name for c in CANONICAL_SCHEMA)
 REQUIRED_COLUMNS = tuple(c.name for c in CANONICAL_SCHEMA if c.required)
 OPTIONAL_COLUMNS = tuple(c.name for c in CANONICAL_SCHEMA if not c.required)
 METRIC_COLUMNS = ("spend", "impressions", "clicks", "conversions", "platform_revenue")
+# The mid-funnel engagement tier + GA4-measured key_events. Order matches the weekly
+# tables clean.py emits (key_events last), not CANONICAL_SCHEMA order.
+ENGAGEMENT_COLUMNS = ("sessions", "engaged_sessions", "page_views", "video_views",
+                      "key_events")
+# Everything additive across rows — what the store may SUM when collapsing unmodeled
+# breakdowns to grain. avg_engagement_seconds is a per-session AVERAGE, never summed.
+SUMMABLE_COLUMNS = METRIC_COLUMNS + ENGAGEMENT_COLUMNS
 
 _SPEC_BY_NAME = {c.name: c for c in CANONICAL_SCHEMA}
 
@@ -148,6 +156,38 @@ def apply_source_map(df: pd.DataFrame, source: str, mappings: dict) -> pd.DataFr
     if colmap is None:
         colmap = sources.get("default", {})
     rename = {raw: canon for raw, canon in colmap.items() if raw in df.columns}
+    return df.rename(columns=rename).copy()
+
+
+def _norm_header(h: str) -> str:
+    """Header-matching normal form: lower, strip quotes/edges, collapse whitespace."""
+    return re.sub(r"\s+", " ", str(h).strip().strip('"').lower())
+
+
+def resolve_synonyms(df: pd.DataFrame, mappings: dict) -> pd.DataFrame:
+    """Rename known column-name VARIANTS to canonical names (non-destructive).
+
+    Uses ``mappings["column_synonyms"]`` (canonical field -> accepted raw header
+    variants), matching case-/whitespace-insensitively. For each canonical field the
+    first present variant is renamed; a canonical column already present is never
+    touched (exact per-source maps win), no raw column is claimed twice, and unknown
+    columns are left alone. Returns a copy.
+    """
+    syn = (mappings or {}).get("column_synonyms") or {}
+    if not syn:
+        return df.copy()
+    norm_to_raw: dict[str, str] = {}
+    for c in df.columns:
+        norm_to_raw.setdefault(_norm_header(c), c)      # first occurrence wins
+    rename: dict[str, str] = {}
+    for canon, variants in syn.items():
+        if canon in df.columns:
+            continue
+        for v in variants or ():
+            raw = norm_to_raw.get(_norm_header(v))
+            if raw is not None and raw not in rename:
+                rename[raw] = canon
+                break
     return df.rename(columns=rename).copy()
 
 

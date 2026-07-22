@@ -1,6 +1,9 @@
-> **Status: proposed design — NOT yet implemented.** Captured 2026-07-22 from a planning
-> session after real platform exports (Meta / Google / Snapchat) exposed a data-loss bug and
-> rigid readers in the file-drop ingestion path. Kept for when there's budget to build it.
+> **Status: IMPLEMENTED 2026-07-22** (Phases 1 + 2, plus two review amendments: no global
+> `results` synonym — Meta's objective-dependent column is asserted only in the bespoke
+> reader; and a loud non-daily-export refusal when >10% of a pull's dates fail to parse).
+> Originally captured 2026-07-22 from a planning session after real platform exports
+> (Meta / Google / Snapchat) exposed a data-loss bug and rigid readers in the file-drop
+> ingestion path. Re-validate against the real three-file inbox on the work machine.
 
 # Plan: Robust ingestion for messy real-world ad-platform exports
 

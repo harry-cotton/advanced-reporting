@@ -149,6 +149,41 @@ def _read_sidecar(csv_path: Path) -> dict | None:
         return None
 
 
+# Refuse a pull when more than this fraction of its rows have unparseable dates: a
+# handful of stray bad rows is normal export noise (dropped + counted), but a majority
+# means the file is not at daily grain at all (weekly/monthly rollups, 'Reporting
+# starts'/'Reporting ends' ranges) and ingesting the parseable fragment would be the
+# same silent-loss failure mode the grain collapse exists to prevent.
+_MAX_BAD_DATE_FRACTION = 0.10
+
+
+def _collapse_to_grain(df: pd.DataFrame) -> pd.DataFrame:
+    """SUM same-key rows in ONE pull down to the store grain (``KEY_COLS``).
+
+    An export broken down by dimensions the schema doesn't model (Age / Gender /
+    Device / placement ...) delivers many rows per grain key. Within a pull those rows
+    are complements of one total, so they SUM; collapsing them keep-last was silent
+    data loss (a real Meta breakdown export surfaced ~3% of true spend). Cross-pull
+    duplicates stay on the keep-latest restatement path in ``consolidate``.
+
+    - ``SUMMABLE_COLUMNS`` sum with ``min_count=1``: an all-NaN group stays NaN
+      ("not measured" — the schema contract), never a fabricated 0.0.
+    - Remaining canonical columns (currency, audience_*, creative*,
+      avg_engagement_seconds) take ``first()`` — constant within a key group on real
+      exports; for ``avg_engagement_seconds`` a documented approximation.
+    - Non-canonical breakdown columns (Age/Gender/...) are aggregated away entirely.
+    """
+    keys = list(KEY_COLS)
+    agg: dict = {}
+    for col in df.columns:
+        if col in keys or col not in schema.CANONICAL_COLUMNS:
+            continue
+        agg[col] = (lambda s: s.sum(min_count=1)) \
+            if col in schema.SUMMABLE_COLUMNS else "first"
+    out = df.groupby(keys, as_index=False, dropna=False, sort=False).agg(agg)
+    return schema.normalize(out)
+
+
 def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
                 generated_at: str | None = None) -> dict:
     """Merge schema-MATCHING raw pulls into the canonical daily history table + manifest.
@@ -188,6 +223,16 @@ def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
             continue
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         n_bad_dates = int(df["date"].isna().sum())
+        n_rows = int(len(df))
+        if n_rows and n_bad_dates > _MAX_BAD_DATE_FRACTION * n_rows:
+            reason = (f"{n_bad_dates} of {n_rows} rows have unparseable dates — likely "
+                      "a non-daily export (weekly/monthly rollups or 'Reporting "
+                      "starts'/'Reporting ends' ranges). Refusing to ingest a fragment; "
+                      "re-export at daily grain or map the date column.")
+            warnings.warn(f"Skipping pull {source}/{path.name}: {reason}", stacklevel=2)
+            skipped.append({"source": source, "file": path.name,
+                            "schema_signature": sig, "reason": reason})
+            continue
 
         # standardize labels BEFORE dedup: keep-latest used to run on raw labels, so a
         # restated pull with label drift ('META' vs 'facebook' vs 'meta') kept BOTH rows
@@ -199,18 +244,20 @@ def consolidate(*, raw_root=None, history_path=None, manifest_path=None,
         if "source" in df.columns:
             df.loc[df["source"] == "", "source"] = source
 
-        # same-key rows WITHIN one pull are silent data loss (multi-account exports with
-        # duplicate campaign names) — cross-pull dups are the intended restatement path
+        # same-key rows WITHIN one pull are an unmodeled breakdown (Age/Gender/Device
+        # ...): complements of one total, so they are SUMMED to grain — keep-last here
+        # was silent data loss. Cross-pull dups stay on the keep-latest restatement path.
         dup_keys = int(df.duplicated(subset=list(KEY_COLS)).sum())
         if dup_keys:
-            warnings.warn(f"Pull {source}/{path.name}: {dup_keys} same-key row(s) within "
-                          "one pull will be collapsed keep-last — if these are distinct "
-                          "campaigns, map campaign_id/account_id so they survive.",
-                          stacklevel=2)
+            warnings.warn(f"Pull {source}/{path.name}: {dup_keys} same-key row(s) "
+                          "summed to grain (unmodeled breakdown aggregated away) — if "
+                          "these are actually distinct campaigns, map campaign_id/"
+                          "account_id so they keep separate rows.", stacklevel=2)
+            df = _collapse_to_grain(df)
         frames.append(df)
         dmin, dmax = _date_bounds(df)
         pulls.append({"source": source, "file": path.name, "stamp": stamp,
-                      "schema_signature": sig, "rows": int(len(df)),
+                      "schema_signature": sig, "rows": n_rows,
                       "bad_date_rows": n_bad_dates, "dup_key_rows": dup_keys,
                       "date_min": dmin, "date_max": dmax})
 

@@ -235,6 +235,94 @@ def test_adobe_reader_semantics(tmp_path):
     assert "ctr_pct" not in df.columns                       # derived -> dropped
 
 
+def test_google_reader_tolerates_missing_optional_columns(tmp_path):
+    """A Google export without Conv. value / Region / Campaign ID (export settings vary
+    by account) ingests instead of raising: absent optionals -> NaN / defaults."""
+    f = tmp_path / "google_ads_campaign_report.csv"
+    f.write_text(
+        "Campaign report\n"
+        '"All campaigns"\n'
+        "Day,Campaign,Campaign type,Cost,Impr.,Clicks,Conversions,Currency code\n"
+        '2026-01-05,Brand A,Search,"1,000",5000,300,12.5,USD\n'
+        "2026-01-05,DG A,Demand Gen,500,9000,150,4.0,USD\n",
+        encoding="utf-8")
+    df = exports.read_google_ads_export(f)
+    assert len(df) == 2
+    assert df["platform_revenue"].isna().all()      # no Conv. value column -> NaN
+    assert (df["geo"] == "national").all()          # no Region column -> default
+    assert (df["campaign_id"] == "").all()          # no Campaign ID -> schema default
+    assert df["spend"].sum() == 1500.0
+
+
+def test_meta_reader_tolerates_missing_results_column(tmp_path):
+    """A Meta export without 'Results' (or Link clicks) still ingests: conversions and
+    clicks land as NaN 'not measured' — never a refusal, never a fabricated 0."""
+    f = tmp_path / "meta_ads_export.csv"
+    f.write_text(
+        "Day,Campaign name,Amount spent (USD),Impressions\n"
+        "2026-01-05,Recruiting - Video,250.10,80000\n",
+        encoding="utf-8")
+    df = exports.read_meta_export(f)
+    assert df["conversions"].isna().all()
+    assert df["clicks"].isna().all()
+    assert df["spend"].iloc[0] == pytest.approx(250.10)
+    assert (df["currency"] == "USD").all()          # still parsed from the header
+
+
+def test_resolve_synonyms_maps_variants_non_destructively():
+    from advanced_reporting.utils import load_mappings
+    df = pd.DataFrame({"Day": ["2026-01-05"], "AMOUNT SPENT": [10.0],
+                       "spend": [99.0], "Impr.": [100]})
+    out = schema.resolve_synonyms(df, load_mappings())
+    assert "date" in out.columns                    # Day -> date (case-insensitive)
+    assert "impressions" in out.columns             # "Impr." -> impressions
+    assert out["spend"].iloc[0] == 99.0             # canonical col present...
+    assert "AMOUNT SPENT" in out.columns            # ...so the variant is NOT claimed
+
+
+def test_snapchat_style_file_ingests_via_generic_reader(tmp_path):
+    """Unknown platform, config not code: a Snapchat-vocabulary export is detected by
+    its synonym-resolved signature, channel comes from the filename hint, Swipe Ups
+    land as clicks — no bespoke reader anywhere."""
+    f = tmp_path / "snapchat_campaign_stats.csv"
+    f.write_text(
+        "Day,Campaign Name,Amount Spent,Impressions,Swipe Ups,Currency\n"
+        "2026-01-05,SC Recruiting,120.50,40000,900,USD\n"
+        "2026-01-06,SC Recruiting,98.20,35000,750,USD\n",
+        encoding="utf-8")
+    assert exports.detect_format(f) == exports.GENERIC_CAMPAIGN
+    source, df = exports.read_export(f)
+    assert source == exports.GENERIC_CAMPAIGN
+    assert (df["channel"] == "snapchat").all()          # filename hint, never a guess
+    assert df["spend"].sum() == pytest.approx(218.70)
+    assert df["clicks"].tolist() == [900.0, 750.0]      # Swipe Ups -> clicks synonym
+    assert (df["currency"] == "USD").all()
+
+
+def test_generic_file_with_unresolvable_channel_raises(tmp_path):
+    """No channel column, no filename hint, no override -> loud refusal (never guess)."""
+    f = tmp_path / "mystery_platform.csv"
+    f.write_text("Day,Campaign Name,Amount Spent,Impressions,Currency\n"
+                 "2026-01-05,X,10.0,100,USD\n", encoding="utf-8")
+    with pytest.raises(schema.SchemaError, match="channel"):
+        exports.read_export(f)
+    # the per-file override resolves it — the ingest.py --channel path
+    _src, df = exports.read_export(f, channel="tiktok")
+    assert (df["channel"] == "tiktok").all()
+
+
+def test_generic_file_without_currency_still_refused(tmp_path):
+    """Synonym tolerance must not erode the currency discipline: a generic file with
+    no currency column is refused unless --currency asserts one."""
+    f = tmp_path / "snapchat_no_currency.csv"
+    f.write_text("Day,Campaign Name,Amount Spent,Impressions\n"
+                 "2026-01-05,X,10.0,100\n", encoding="utf-8")
+    with pytest.raises(schema.SchemaError, match="currency"):
+        exports.read_export(f)
+    _src, df = exports.read_export(f, currency="USD")
+    assert (df["currency"] == "USD").all()
+
+
 def test_scope_to_sources_filters_history():
     from advanced_reporting.utils import scope_to_sources
     hist = pd.DataFrame({"source": ["adobe", "synthetic"], "spend": [1.0, 2.0]})

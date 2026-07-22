@@ -46,7 +46,43 @@ ga4_export:
     email / newsletter: email
     social / organic: social_organic
 
+# Column-name synonyms for tolerant reading (schema.resolve_synonyms + the generic
+# reader): canonical field -> accepted raw header variants, matched case- and
+# whitespace-insensitively. NON-DESTRUCTIVE: a canonical column already present is
+# never touched, so exact per-source maps always win. Deliberately conservative —
+# platform-ambiguous columns (Meta's objective-dependent "Results", "Purchases" vs
+# "Leads") are NOT global synonyms; assert those consciously in a per-source map or a
+# bespoke reader instead.
+column_synonyms:
+  date: [date, day, date_start, "start date", "start date (in utc)"]
+  campaign: [campaign, "campaign name", campaign_name]
+  channel: [channel, platform, "campaign type", network]
+  geo: [geo, region, country, market]
+  spend: [spend, cost, "amount spent", "total spent", "total spend", cost_usd, "media cost"]
+  impressions: [impressions, "impr.", impr, imps]
+  clicks: [clicks, "link clicks", link_clicks, "swipe ups", swipes]
+  conversions: [conversions, "conv."]
+  platform_revenue: ["conv. value", "conversion value", action_values, "purchases conversion value"]
+  currency: [currency, "currency code"]
+  video_views: [video_views, "video views", "video plays"]
+
+# Generic-reader channel resolution for exports with NO channel column (resolution
+# order: channel column -> --channel override -> filename hint below -> default_channel
+# -> loud SchemaError; never a silent guess). Hints are case-insensitive filename
+# substrings. Adding a new platform = a synonym row above + a hint + an alias here.
+generic_export:
+  filename_channel_hints:
+    snapchat: snapchat
+    snap_: snapchat
+    display: display
+    ctv: ctv
+    audio: audio
+    jobboard: jobboards
+  default_channel: null
+
 channel_aliases:
+  snapchat: snapchat
+  snap: snapchat
   facebook: meta
   fb: meta
   instagram: meta

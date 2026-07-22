@@ -36,6 +36,12 @@ def main(argv=None) -> None:
                          "(Google Ads / Meta / LinkedIn / GA4; format auto-detected). "
                          "Bare --inbox uses data/inbox/; pass a subfolder to ingest one "
                          "test at a time, e.g. --inbox \"data/inbox/Recruitment Marketing Test\"")
+    ap.add_argument("--channel", default=None,
+                    help="inbox only: channel for generic exports with no channel "
+                         "column (overrides mappings.yaml filename hints)")
+    ap.add_argument("--currency", default=None,
+                    help="inbox only: currency for generic exports that carry none "
+                         "(never assumed silently)")
     ap.add_argument("--consolidate-only", action="store_true",
                     help="rebuild history.parquet from existing pulls without fetching")
     ap.add_argument("--reset", "--fresh", action="store_true", dest="reset",
@@ -75,7 +81,8 @@ def main(argv=None) -> None:
         parsed = []
         for f in files:
             try:
-                source, df = read_export(f)
+                source, df = read_export(f, channel=args.channel,
+                                         currency=args.currency)
             except Exception as e:            # one bad file must not block the rest
                 print(f"  SKIPPED {f.name}: {e}")
                 continue

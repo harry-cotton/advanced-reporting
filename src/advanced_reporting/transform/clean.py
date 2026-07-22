@@ -13,12 +13,13 @@ import pandas as pd
 from ..utils import load_mappings
 from ..ingestion import schema, store
 
-METRIC_COLS = ["spend", "impressions", "clicks", "conversions", "platform_revenue"]
+# Shared with the store's grain aggregation — one source of truth in the schema module
+# (avg_engagement_seconds is a per-session average, not a sum, so it is excluded there).
+METRIC_COLS = list(schema.METRIC_COLUMNS)
 
 # Summable extra columns carried through the weekly tables when present: the mid-funnel
-# engagement tier + GA4-measured key_events (avg_engagement_seconds is a per-session
-# average, not a sum, so it is intentionally excluded). Absent on pure ad CSVs.
-ENGAGEMENT_COLS = ["sessions", "engaged_sessions", "page_views", "video_views", "key_events"]
+# engagement tier + GA4-measured key_events. Absent on pure ad CSVs.
+ENGAGEMENT_COLS = list(schema.ENGAGEMENT_COLUMNS)
 
 # Kept as a fallback so standardize_channel still works if config/mappings.yaml is
 # missing or unreadable. Must stay in sync with mappings.yaml's channel_aliases.
