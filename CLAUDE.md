@@ -196,6 +196,17 @@ and (unless `--no-names`) runs the generator to `outputs/trafficking_sheet.xlsx`
 - **Avoid keeping the live `.git` inside a OneDrive/Dropbox-synced folder** — the sync layer can
   lock/corrupt it. A normal local dev folder (e.g. `C:\dev\advanced-reporting`) is safest.
 - The repo was seeded from `advanced-reporting.bundle`.
+- **`.venv` launcher `.exe` stubs (streamlit.exe, pip.exe, etc.) hardcode the absolute path to
+  `python.exe` at creation time.** If the repo folder is later moved/renamed (e.g. seeded at one
+  path, then relocated into `dev projects\`), those stubs break with `Fatal error in launcher:
+  Unable to create process ... The system cannot find the file specified.` — NOT a broken venv,
+  NOT an IT/execution-policy issue. Fix: call the interpreter directly instead of the stub, e.g.
+  `.venv\Scripts\python.exe -m streamlit run src\advanced_reporting\dashboard\app.py`. If that
+  also fails, recreate the venv (`python -m venv .venv` + `pip install -r requirements.txt`).
+- On a plain PowerShell window (not VS Code's integrated terminal), the venv isn't auto-activated
+  — `streamlit` etc. won't be found on PATH until you activate it or use the `-m` form above. A
+  PowerShell execution-policy error on `Activate.ps1` is a separate, unrelated issue (often IT
+  policy on managed machines) — the `python.exe -m <tool>` form sidesteps it entirely.
 
 ## Roadmap
 
