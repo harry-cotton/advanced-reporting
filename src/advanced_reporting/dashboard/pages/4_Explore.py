@@ -16,6 +16,7 @@ from advanced_reporting.agent import load_active_spec  # noqa: E402
 from advanced_reporting.dashboard import filters, insights, theme  # noqa: E402
 from advanced_reporting.reporting import metrics as M  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
+from advanced_reporting.reporting.framing import resolve_framing  # noqa: E402
 from advanced_reporting.utils import load_config  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Explore", layout="wide")
@@ -65,9 +66,15 @@ def _parse_lens_cached(text: str, use_llm: bool):
 m = _load_metrics(str(metrics_f), metrics_f.stat().st_mtime)
 has_engagement = "sessions" in m.columns
 _rep = (load_config().get("reporting", {}) or {})
-_targets = _rep.get("targets") or {}
 _spec, _ = load_active_spec(ROOT)
-kpi_label = _rep.get("kpi_label") or _spec.get("kpi_label") or "key events"
+# framing resolver: stale-engagement labels/targets are dropped, never rendered as
+# true. This page shows CLIENT targets only (config or engagement-confirmed bands —
+# pre-existing "no spec benchmarks here" semantics via client_target_keys).
+_res = resolve_framing(m, ROOT, spec=_spec)
+kpi_label = _res.kpi_label
+_targets = {k: v for k, v in _res.targets.items()
+            if k in _res.client_target_keys}
+theme.intake_banner(_res)
 
 # --- sidebar: global filters + goal lens ---
 dr, chsel = filters.sidebar_filters(
@@ -158,9 +165,14 @@ if lens_spec is not None:
 st.subheader("Funnel & drop-off")
 # Skip untracked stages (an all-zero sessions/engaged stage is "not measured", not a real
 # pinch to zero) so the funnel doesn't collapse to 0 and then rebound to a claimed count.
-recs = [r for r in M.funnel(f).to_dict("records") if float(r["value"] or 0) > 0]
+recs = [r for r in M.funnel(f, steps=_res.funnel_steps).to_dict("records")
+        if float(r["value"] or 0) > 0]
 if recs:
-    recs[-1] = {**recs[-1], "label": f"{recs[-1]['label']} (platform-claimed)"}
+    # provenance suffix follows the LAST stage's identity, not a hardcoded
+    # assumption — a confirmed funnel may end on measured key_events
+    _suffix = {"conversions": " (platform-claimed)", "key_events": " (measured)"}
+    recs[-1] = {**recs[-1],
+                "label": recs[-1]["label"] + _suffix.get(recs[-1]["stage"], "")}
     fcols = st.columns(len(recs))
     for col, r in zip(fcols, recs):
         sr = r["step_rate"]

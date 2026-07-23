@@ -167,21 +167,24 @@ _STAGE_LABEL = {
 }
 
 
-def funnel(weekly: pd.DataFrame) -> pd.DataFrame:
+def funnel(weekly: pd.DataFrame, steps: list[str] | None = None) -> pd.DataFrame:
     """National funnel volumes + step pass-through rates (the drop-off view).
 
     Each stage's ``step_rate`` is stage / previous available stage. Stages whose column
     is absent or never measured (engagement may be missing) are skipped, so the funnel
-    collapses gracefully to whatever stages exist.
+    collapses gracefully to whatever stages exist. ``steps`` overrides the default
+    stage list (the confirmed intake funnel); labels degrade to the column name.
     """
     totals = _totals(weekly)
     rows, prev_val, prev_stage = [], None, None
-    for stage in FUNNEL_STAGES:
+    for stage in (steps or FUNNEL_STAGES):
         v = totals.get(stage)
         if v is None or (isinstance(v, float) and math.isnan(v)):
             continue
         rate = (v / prev_val) if (prev_val not in (None, 0)) else float("nan")
-        rows.append({"stage": stage, "label": _STAGE_LABEL.get(stage, stage),
+        rows.append({"stage": stage,
+                     "label": _STAGE_LABEL.get(stage,
+                                               stage.replace("_", " ").capitalize()),
                      "value": float(v), "from": prev_stage, "step_rate": rate})
         prev_val, prev_stage = v, stage
     return pd.DataFrame(rows, columns=["stage", "label", "value", "from", "step_rate"])

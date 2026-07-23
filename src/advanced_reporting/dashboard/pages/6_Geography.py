@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.agent import load_active_spec  # noqa: E402
 from advanced_reporting.dashboard import drilldown, filters, insights, theme  # noqa: E402
+from advanced_reporting.reporting.framing import resolve_framing  # noqa: E402
 from advanced_reporting.utils import load_config, scope_to_sources  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Geography", layout="wide")
@@ -35,16 +36,11 @@ GEO_STATES: dict = _data.get("geo_states") or {}
 POPS: dict = _data.get("geo_populations") or {}
 _rep = cfg.get("reporting") or {}
 _spec, _ = load_active_spec(ROOT)
-KPI = _rep.get("kpi_label") or _spec.get("kpi_label") or "key events"
 
 
 def _geo_label(code: str) -> str:
     return GEO_LABELS.get(code, str(code))
 
-
-st.caption(f"Where **{KPI}** come from: GA4-measured (all traffic) by field-office "
-           "region, with the CRM's submitted applications alongside. Descriptive — "
-           "regional demand, not media attribution.")
 
 history_f = ROOT / "data" / "processed" / "history.parquet"
 if not history_f.exists():
@@ -63,6 +59,15 @@ def _load_kpi(path: str, mtime: float | None) -> pd.DataFrame | None:
 
 
 hist = scope_to_sources(_load_hist(str(history_f), history_f.stat().st_mtime), cfg)
+# KPI label resolved against the LOADED store (framing resolver): a stale
+# engagement's label is dropped and surfaced, never rendered as if it described
+# this data. Works on the store frame — the resolver only touches base columns.
+_res = resolve_framing(hist, ROOT, cfg=cfg, spec=_spec)
+KPI = _res.kpi_label
+theme.intake_banner(_res)
+st.caption(f"Where **{KPI}** come from: GA4-measured (all traffic) by field-office "
+           "region, with the CRM's submitted applications alongside. Descriptive — "
+           "regional demand, not media attribution.")
 _kpi_rel = _data.get("kpi_path")
 _kpi_f = (ROOT / _kpi_rel) if _kpi_rel else None
 kpi = _load_kpi(str(_kpi_f) if _kpi_f else "",

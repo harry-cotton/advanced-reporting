@@ -35,6 +35,8 @@ from ..agent.validate import BLOCK_CATALOG  # noqa: E402
 from ..dashboard import insights, theme  # noqa: E402
 from ..dashboard.mmm_view import (cost_per_outcome_intervals, is_count_target,  # noqa: E402
                                   load_mmm, plain_summary, roi_intervals)
+from .framing import (UnconfirmedFramingError, require_clean,  # noqa: E402
+                      resolve_framing)
 from ..utils import (load_config, load_pipeline_stages, project_root,  # noqa: E402
                      scope_to_sources)
 
@@ -423,7 +425,8 @@ def _singular(label: str) -> str:
 
 
 # ---------------------------------------------------------------- the report
-def build_report(root: Path | None = None, audience: str | None = None) -> Path:
+def build_report(root: Path | None = None, audience: str | None = None,
+                 allow_unconfirmed: bool = False) -> Path:
     root = root or project_root()
     weekly_f = root / "data" / "processed" / "channel_weekly_metrics.csv"
     if not weekly_f.exists():
@@ -438,8 +441,21 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
 
     rep = cfg.get("reporting") or {}
     spec, spec_note = load_active_spec(root)
-    kpi_label = rep.get("kpi_label") or spec.get("kpi_label") or "key events"
-    targets = {**(spec.get("targets") or {}), **(rep.get("targets") or {})}
+    # framing resolver + gate: an emailable client artifact must never ship with
+    # unconfirmed or contradicted framing. Unconfirmed/invalid -> refuse (the
+    # dashboard banners; this raises); --allow-unconfirmed builds a watermarked
+    # DRAFT from the neutral resolved values (stale judgments can't leak by
+    # construction). Confirmed-but-mismatched still refuses — that's a config bug
+    # to fix, not a draft to watermark.
+    res = resolve_framing(weekly, root, cfg=cfg, spec=spec, stages=stages)
+    draft = res.status != "confirmed"
+    if draft and not allow_unconfirmed:
+        raise UnconfirmedFramingError(res)
+    if not draft:
+        require_clean(res, "the client report")
+    kpi_label = res.kpi_label
+    targets = res.targets
+    stages = res.stages
     tier = spec.get("primary_tier") or (
         "outcome" if insights._has_measured(weekly) else "reach")
     project = (cfg.get("project") or {}).get("name", "Campaign report")
@@ -478,7 +494,7 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
         return _section(b["title"], _md_to_html(b["narrative"]))
 
     def _b_pacing() -> str:
-        b = insights.pacing_insight(weekly, rep.get("budget"))
+        b = insights.pacing_insight(weekly, res.budget)
         if not b:
             return ""
         mix = insights.spend_mix(weekly)
@@ -520,7 +536,7 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
     lede = _md_to_html(insights.topline_summary(weekly, kpi_label))
     scorecard = _scorecard_html(insights.tier_scorecard(
         weekly, tier, targets=targets, kpi_label=kpi_label,
-        config_target_keys=set(rep.get("targets") or {})))
+        config_target_keys=set(res.client_target_keys)))
     channel_tbl = _channel_summary_html(weekly, kpi_label)
 
     # deterministic next steps (no LLM): the eligibility engine's computed recommendations
@@ -572,8 +588,11 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
 
     # cover: "Prepared for [client] · [campaign]" when configured (reporting.client_name /
     # reporting.campaign_name); the methodology note is a quiet footnote, not the subtitle
-    client_name = rep.get("client_name")
-    campaign_name = rep.get("campaign_name")
+    # cover renders only a NAMED client — the resolver's project-name default is a
+    # dashboard nicety, not a "Prepared for" line
+    client_name = (res.client_name
+                   if res.sources.get("client_name") != "default" else None)
+    campaign_name = res.campaign_name
     cover_bits = [b for b in (client_name, campaign_name) if b]
     cover_html = (f'<p class="cover">Prepared for {html.escape(" · ".join(cover_bits))}</p>'
                   if cover_bits else "")
@@ -628,14 +647,34 @@ def build_report(root: Path | None = None, audience: str | None = None) -> Path:
              color: {theme.INK_SOFT}; font-size: 0.82rem; }}
     """
 
+    # DRAFT watermarks (allow_unconfirmed builds only): three redundant, static,
+    # email-safe marks — title prefix, an in-flow amber stamp (prints), and an
+    # on-screen fixed ribbon. A confirmed build carries none of them.
+    title_prefix = "DRAFT — " if draft else ""
+    draft_stamp = ""
+    if draft:
+        css += f"""
+    .draft-stamp {{ background: {theme.BAND_FILL['warn']};
+                   color: {theme.VERDICT_INK['warn']}; font-weight: 650;
+                   padding: 8px 14px; border-radius: 8px; margin: 10px 0; }}
+    body::after {{ content: "DRAFT — framing unconfirmed"; position: fixed;
+                  top: 42%; left: 50%; transform: translate(-50%,-50%) rotate(-28deg);
+                  font-size: 64px; color: {theme.INK}; opacity: 0.08;
+                  pointer-events: none; white-space: nowrap; }}
+    """
+        draft_stamp = ('<p class="draft-stamp">DRAFT — framing unconfirmed '
+                       '(report framing was never confirmed for this data) · '
+                       'not for client delivery</p>')
+
     doc = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(project)} — {lo:%d %b %Y} to {hi:%d %b %Y}</title>
+<title>{title_prefix}{html.escape(project)} — {lo:%d %b %Y} to {hi:%d %b %Y}</title>
 <style>{css}</style></head>
 <body>
 <header>
   <h1>How the campaign is doing</h1>
+  {draft_stamp}
   {cover_html}
   <p class="soft">{html.escape(project)} · {lo:%d %b %Y} – {hi:%d %b %Y} ·
   {len(insights._paid_channels(weekly))} paid channels · {html.escape(method_line)}</p>

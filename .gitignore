@@ -2,6 +2,7 @@
 .env
 *.env
 config/config.yaml
+config/engagement.yaml
 secrets/
 *.key
 

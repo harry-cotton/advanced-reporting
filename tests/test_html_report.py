@@ -5,10 +5,24 @@ import json
 
 import pandas as pd
 
+import pytest
+
 from advanced_reporting.agent import summaries as S
 from advanced_reporting.agent.commentary_agent import LOGIC_VERSION
+from advanced_reporting.reporting import html_report as HR
+from advanced_reporting.reporting.framing import write_engagement
 from advanced_reporting.reporting.html_report import (REPORT_PATH, _delta_class,
                                                       build_report)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_config(monkeypatch):
+    """build_report used to read the developer's REAL config.yaml (pre-existing
+    coupling that passed by luck); the framing gate makes that untenable — pin a
+    minimal fixture cfg so these tests behave identically on any machine/mode."""
+    monkeypatch.setattr(HR, "load_config",
+                        lambda: {"project": {"name": "Advanced Reporting"},
+                                 "reporting": {}})
 
 
 def _seed(root, with_spec=True, with_commentary=False, stale_commentary=False):
@@ -24,6 +38,10 @@ def _seed(root, with_spec=True, with_commentary=False, stale_commentary=False):
         "conversions": [400.0, 120.0, 410.0, 118.0],
         "key_events": [100.0, 100.0, 105.0, 98.0],
     }).to_csv(proc / "channel_weekly_metrics.csv", index=False)
+    # confirmed framing basis: the gate refuses unconfirmed builds, and the spec's
+    # judgment fields only participate under a confirmation (kpi_metric is backed
+    # by the fixture's key_events, so status stays "confirmed")
+    write_engagement(root, {"kpi_metric": "key_events"})
     h = S.data_hash(root)
     out = root / "outputs"
     out.mkdir()

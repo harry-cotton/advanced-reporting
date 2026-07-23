@@ -23,6 +23,7 @@ from ..dashboard import insights
 from ..dashboard.mmm_view import (cost_per_outcome_intervals, is_count_target,
                                   load_mmm, roi_intervals)
 from ..llm import call
+from ..reporting.framing import resolve_framing
 from ..utils import load_config, load_pipeline_stages, project_root, scope_to_sources
 from . import guards, knowledge, summaries
 from .recommendations import MAX_RECS, REC_TITLES, eligible_recommendations
@@ -189,8 +190,14 @@ def build_facts(root: Path | None = None) -> tuple[dict, list[dict]] | None:
 
     rep = (cfg.get("reporting") or {})
     spec, _ = load_active_spec(root)
-    kpi_label = rep.get("kpi_label") or spec.get("kpi_label") or "key events"
-    targets = {**(spec.get("targets") or {}), **(rep.get("targets") or {})}
+    # framing resolver: stamped AI commentary must not inherit a stale engagement's
+    # label/targets/funnel (the CLIENTXYZ finding). Neutralized silently — the FACTS
+    # are computed from the resolved framing; the dashboard/report surface status.
+    stages = load_pipeline_stages(cfg, root)
+    res = resolve_framing(weekly, root, cfg=cfg, spec=spec, stages=stages)
+    kpi_label = res.kpi_label
+    targets = res.targets
+    stages = res.stages
     tier = spec.get("primary_tier") or (
         "outcome" if insights._has_measured(weekly) else "reach")
 
@@ -207,11 +214,11 @@ def build_facts(root: Path | None = None) -> tuple[dict, list[dict]] | None:
         "date_range": [str(weekly["date"].min().date()),
                        str(weekly["date"].max().date())],
         "n_paid_channels": len(insights._paid_channels(weekly)),
-        "insights": _insight_facts(weekly, hist, kpi_label, rep.get("budget"),
-                                   stages=load_pipeline_stages(cfg, root)),
+        "insights": _insight_facts(weekly, hist, kpi_label, res.budget,
+                                   stages=stages),
         "primary_tier_scorecard": _scorecard_facts(
             weekly, tier, targets, kpi_label,
-            config_target_keys=set(rep.get("targets") or {})),
+            config_target_keys=set(res.client_target_keys)),
     }
     if (m := _mmm_facts(mmm)) is not None:
         facts["mmm"] = m

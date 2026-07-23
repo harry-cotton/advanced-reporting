@@ -24,6 +24,7 @@ from advanced_reporting.agent.commentary_agent import (  # noqa: E402
 from advanced_reporting.agent.validate import BLOCK_CATALOG  # noqa: E402
 from advanced_reporting.dashboard import filters, insights, theme  # noqa: E402
 from advanced_reporting.reporting import lens as L  # noqa: E402
+from advanced_reporting.reporting.framing import resolve_framing  # noqa: E402
 from advanced_reporting.utils import load_config  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Exec Summary", layout="wide")
@@ -76,8 +77,14 @@ _stages_df = _load_stages(_stages_f.stat().st_mtime
 # The report spec (outputs/report_spec.json, written by scripts/advise.py --spec)
 # fills the gaps config leaves; explicit config keys always win. No spec -> {}.
 spec, spec_note = load_active_spec(ROOT)
-kpi_label = rep.get("kpi_label") or spec.get("kpi_label") or "key events"
-budget_cfg = rep.get("budget")
+# The framing guard (reporting/framing.py): configured KPI/targets/funnel must exist
+# in the LOADED data — stale engagement config (the CLIENTXYZ finding) is dropped and
+# surfaced as a banner, never rendered as if true. Guarded on the unfiltered table so
+# a sidebar filter can't flap the verdict.
+_res = resolve_framing(weekly_all, ROOT, cfg=cfg, spec=spec, stages=_stages_df)
+kpi_label = _res.kpi_label
+_stages_df = _res.stages
+budget_cfg = _res.budget
 
 # --- global sidebar filters (date + channel, carry across every tab) ---------------
 _dr, _chsel = filters.sidebar_filters(
@@ -93,11 +100,15 @@ if weekly.empty:
 
 # --- masthead -------------------------------------------------------------------
 st.title("How the campaign is doing")
+theme.intake_banner(_res)
 lo, hi = weekly["date"].min(), weekly["date"].max()
 n_paid = len(insights._paid_channels(weekly))
 _ai_on = bool(rep.get("ai_commentary"))
-st.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · outcome measured "
-           f"as **{kpi_label}**. Click any channel to focus the whole dashboard on it.")
+_cap, _edit = st.columns([6, 1])
+_cap.caption(f"{lo:%d %b %Y} – {hi:%d %b %Y} · {n_paid} paid channels · outcome "
+             f"measured as **{kpi_label}**. Click any channel to focus the whole "
+             "dashboard on it.")
+_edit.page_link("pages/0_Setup.py", label="framing · edit", icon="✏️")
 if spec_note:
     st.caption(f"⚠ {spec_note}")
 # Methodology + the agent's watch flags are analyst matter — relocated below the fold
@@ -164,10 +175,11 @@ _tier_label = st.segmented_control(
     key="_tier_lens", label_visibility="collapsed",
     help="Awareness → reach, Engagement → intent, Action → outcome (the KPI pyramid).")
 _tier = _TIER_BY_LABEL.get(_tier_label or _default_label, "reach")
-# targets: spec fills the gaps, explicit config wins per metric key. config_target_keys
-# lets the scorecard label a config band "client target" vs a spec band "industry benchmark".
-_targets = {**(spec.get("targets") or {}), **(rep.get("targets") or {})}
-_cfg_keys = set(rep.get("targets") or {})
+# targets: layered config > engagement > spec per metric key, guarded (dead targets
+# dropped) in _res. client_target_keys lets the scorecard label a config/engagement
+# band "client target" vs a spec band "industry benchmark".
+_targets = _res.targets
+_cfg_keys = set(_res.client_target_keys)
 _sc = insights.tier_scorecard(weekly, _tier, targets=_targets, kpi_label=kpi_label,
                               config_target_keys=_cfg_keys)
 
@@ -627,6 +639,8 @@ _BLOCK_RENDERERS = {
 assert set(_BLOCK_RENDERERS) == set(BLOCK_CATALOG), \
     "dashboard block renderers out of sync with agent BLOCK_CATALOG"
 for _name in (spec.get("blocks") or BLOCK_CATALOG):
+    if _name in _res.hidden_blocks:   # judgment blocks hide while unconfirmed —
+        continue                      # neutral defaults, never rendered guesses
     _BLOCK_RENDERERS[_name]()
 
 # --- AI commentary (A2): off by default, clearly stamped, number-guarded -----------

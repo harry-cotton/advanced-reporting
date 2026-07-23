@@ -119,6 +119,7 @@ def channel_color(channel: str, i: int = 0) -> str:
 # Nav is grouped: the client STORY arc (what a CMO reads top-to-bottom), then a gutter,
 # then the ANALYST tools. (label, path-relative-to-app.py, group).
 _NAV_PAGES = [
+    ("Setup",        "pages/0_Setup.py",       "story"),   # first per intake brief
     ("Exec Summary", "app.py",                 "story"),
     ("Channels",     "pages/1_Channels.py",    "story"),
     ("Audiences",    "pages/2_Audiences.py",   "story"),
@@ -223,6 +224,55 @@ def action_title(insight: str, sub: str | None = None) -> None:
 def prose(text: str) -> None:
     """Render a woven narrative paragraph (markdown, money-safe)."""
     st.markdown(_escape_math(text))
+
+
+def framing_banner(mismatches) -> None:
+    """Legacy mismatch-list banner (superseded by ``intake_banner``; kept for
+    compat). Tells the analyst WHAT was dropped and why."""
+    if not mismatches:
+        return
+    lines = "\n".join(f"- `{m.source}` = **{m.value}** — {m.problem} "
+                      f"(*{m.resolution}*)" for m in mismatches)
+    st.error("**Configured framing doesn't match the loaded data** — stale "
+             "engagement config? The affected framing was dropped from this "
+             "dashboard and the client report will refuse to build until "
+             "`config/config.yaml` is fixed:\n\n" + lines)
+
+
+def _mismatch_lines(mismatches) -> str:
+    return "\n".join(f"- `{m.source}` = **{m.value}** — {m.problem} "
+                     f"(*{m.resolution}*)" for m in mismatches)
+
+
+def intake_banner(resolved) -> None:
+    """The intake-status banner every page shows (reporting/framing.py's
+    ``ResolvedFraming``): silent when confirmed+clean; names the offender when the
+    confirmed framing is contradicted; points at Setup while unconfirmed."""
+    note = f"\n\n_{resolved.engagement_note}_" if resolved.engagement_note else ""
+    if resolved.status == "confirmed":
+        if resolved.mismatches:      # confirmed engagement, spec-layer drops etc.
+            st.error("**Part of the configured framing doesn't match the loaded "
+                     "data** — the affected fields were dropped; the client report "
+                     "will refuse to build until this is fixed (Setup page or "
+                     "config):\n\n" + _mismatch_lines(resolved.mismatches) + note)
+        return
+    if resolved.status == "invalid":
+        first = resolved.mismatches[0] if resolved.mismatches else None
+        head = (f"**Configured KPI framing `{first.value}` isn't backed by the "
+                "loaded data** — that field was reset to neutral defaults. "
+                if first else
+                "**The confirmed framing isn't backed by the loaded data.** ")
+        st.error(head + "→ Re-confirm on the **Setup** page.\n\n"
+                 + _mismatch_lines(resolved.mismatches) + note)
+        return
+    # unconfirmed
+    if any(v != "default" for v in resolved.sources.values()):
+        st.warning("**Report framing not confirmed** — showing hand-configured "
+                   "framing from `config.yaml`. → Confirm it on the **Setup** page "
+                   "to clear this banner and enable the client report." + note)
+    else:
+        st.warning("**Report framing not confirmed for this data** — showing "
+                   "neutral defaults. → Confirm on the **Setup** page." + note)
 
 
 def ai_block(md: str) -> None:

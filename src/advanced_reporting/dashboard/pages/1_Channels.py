@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 from advanced_reporting.agent import load_active_spec  # noqa: E402
 from advanced_reporting.dashboard import drilldown, filters, insights, theme  # noqa: E402
+from advanced_reporting.reporting.framing import guard_stages, resolve_framing  # noqa: E402
 from advanced_reporting.utils import load_config  # noqa: E402
 
 st.set_page_config(page_title="Advanced Reporting — Channels", layout="wide")
@@ -25,13 +26,8 @@ theme.nav_bar()
 _cfg = load_config()
 _rep = (_cfg.get("reporting") or {})
 _spec, _ = load_active_spec(ROOT)
-KPI = _rep.get("kpi_label") or _spec.get("kpi_label") or "key events"
-_KPIS = KPI[:-1] if KPI.endswith("s") else KPI          # singular ("application start")
 
 st.title("Channels")
-st.caption(f"Trends, efficiency and the campaign → audience → creative breakdown. "
-           f"**{KPI.capitalize()}** are analytics-measured at campaign grain; everything "
-           "below that is **platform-claimed**.")
 
 metrics_f = ROOT / "data" / "processed" / "channel_weekly_metrics.csv"
 history_f = ROOT / "data" / "processed" / "history.parquet"
@@ -50,6 +46,16 @@ def _load(path: str, mtime: float) -> pd.DataFrame:
 
 weekly = _load(str(metrics_f), metrics_f.stat().st_mtime)
 hist = _load(str(history_f), history_f.stat().st_mtime)
+
+# KPI label resolved AFTER the data loads so the framing guard can check it against
+# what's actually measured (stale-engagement config never frames this page).
+_res = resolve_framing(weekly, ROOT, cfg=_cfg, spec=_spec)
+KPI = _res.kpi_label
+_KPIS = KPI[:-1] if KPI.endswith("s") else KPI          # singular ("application start")
+theme.intake_banner(_res)
+st.caption(f"Trends, efficiency and the campaign → audience → creative breakdown. "
+           f"**{KPI.capitalize()}** are analytics-measured at campaign grain; everything "
+           "below that is **platform-claimed**.")
 
 _dr, _chsel = filters.sidebar_filters(
     weekly["channel"].unique(),
@@ -257,8 +263,13 @@ def _load_stages(mtime: float | None):
 
 _st_rel = (_cfg.get("data") or {}).get("pipeline_stages_path")
 _st_f = (ROOT / _st_rel) if _st_rel else None
-_aq = insights.applicant_quality_insight(
-    _load_stages(_st_f.stat().st_mtime if _st_f is not None and _st_f.exists() else None))
+_stages_raw = _load_stages(_st_f.stat().st_mtime
+                           if _st_f is not None and _st_f.exists() else None)
+# guard: a stages file from another engagement (disjoint date window) must not render
+_stages_ok, _st_mm = guard_stages(weekly, _stages_raw)
+if _st_mm is not None:
+    st.caption(f"⚠ {_st_mm}")
+_aq = insights.applicant_quality_insight(_stages_ok)
 if _aq:
     st.divider()
     theme.action_title(
