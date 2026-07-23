@@ -72,14 +72,29 @@ store the pipeline reads from, so history grows over time. A second, forward pat
    `metrics.py` (tiered **KPI-pyramid** taxonomy — reach/intent/outcome — from `config/metrics.yaml`,
    campaign-goal tagging from `config/campaign_goals.yaml`, plus funnel + value-format helpers);
    `lens.py` (**free-text report lens**: NL intent → `ReportSpec` → deterministic metrics + a
-   tailored narrative; deterministic keyword parser is the default, guarded LLM path optional).
+   tailored narrative; deterministic keyword parser is the default, guarded LLM path optional);
+   `framing.py` (**intake/framing resolver** — `resolve_framing()`: per-field cascade
+   `config.yaml` > `config/engagement.yaml` > report spec > neutral defaults, data guard applied
+   to the winning value; status `confirmed`/`unconfirmed`/`invalid`; lenient default =
+   guard-passing hand config confirms, `reporting.intake_mode: strict` requires Setup; stored
+   data hash is provenance only — refreshes never retrigger intake, guard failures do. Dashboard
+   shows `theme.intake_banner` + hides judgment blocks while not confirmed. **Client-report
+   gate:** build refuses while unconfirmed/invalid (`UnconfirmedFramingError` → Setup pointer);
+   `--allow-unconfirmed` builds a DRAFT-watermarked report from neutral values. Design sources:
+   `docs/design-intake-agent.md` + `docs/notes-intake-agent.md`).
 5. **`dashboard/`** — Streamlit multipage app. `app.py` is the editorial **narrative
    Overview** (executive tile row + 4 deterministic insight blocks from `insights.py`;
-   serif action titles; the claims-vs-measured honesty visual). Sub-pages: `1_Channels`
+   serif action titles; the claims-vs-measured honesty visual). Sub-pages (filename-order
+   nav, so Setup is first): `0_Setup` (**intake** — the agent proposes a framing from the
+   LOADED data, the human confirms → `config/engagement.yaml`; the form offers only
+   data-backed options, optional LLM narration is display-only), `1_Channels`
    (trends, efficiency scatter, nested channel→campaign→audience→creative table),
    `2_Audiences` (cost-per-claimed rankings — everything below campaign grain is labeled
    platform-claimed; unparsed-name callout), `3_Data_Quality`, `4_Explore` (KPI pyramid +
-   goal lens + free-text lens). `theme.py` holds the design tokens + the one
+   goal lens + free-text lens), `5_Results` (the MMM page — engine-agnostic render of the
+   persisted `MMMResult`, populated only when run artifacts exist), `6_Geography` (regional
+   heat map + over/under-index vs population; descriptive, never causal). `theme.py` holds
+   the design tokens + the one
    `plotly_chart()` house-style helper every chart goes through; `drilldown.py` the
    pure-pandas aggregations (its `ad_group_table` structurally carries NO key_events —
    GA4 measures at campaign grain only).
@@ -101,7 +116,10 @@ store the pipeline reads from, so history grows over time. A second, forward pat
    set; guard-rejected drafts are never written) → `outputs/commentary_ai.md` (stamped,
    hash-keyed). Dashboard shows it only when `reporting.ai_commentary: true` (off by
    default). Golden-set evals in `tests/test_agent_evals.py` (mocked, CI-safe) + a live
-   smoke test that activates when a key is present. A3 parked — see the brief.
+   smoke test that activates when a key is present. **Intake (built):** `intake.py` —
+   deterministic facts + framing proposal from the store (outcome coverage, funnel
+   candidates); feeds the Setup page; an API key only upgrades the proposal's prose
+   (`narrate_proposal`), never its values. A3 parked — see the brief.
 7. **`planner/`** — turns *goals + rails* into a validated **`CampaignPlan`** that feeds the
    naming generator (Plan rows → names + UTMs). Same spine as `lens.py`: deterministic default
    + a **guarded LLM path** (one structured call — model set in rails `llm.model`, Sonnet-class default — when a key is
@@ -161,7 +179,9 @@ holds the granular media data.
   `advanced_reporting`. Scripts insert `src` on `sys.path`.
 - Config in `config/config.yaml` (gitignored; falls back to `config.example.yaml`). Key blocks:
   `data` (source, geos, start/end window), `modeling`, `quality` (`spike_factor`, `fill_freq`),
-  `reporting`. Committed structural config (no secrets/data): `config/mappings.yaml` (channel
+  `reporting`. `config/engagement.yaml` (gitignored) is the per-engagement **confirmed framing**
+  — provenance-stamped, written only by the dashboard Setup page (explicit `config.yaml` keys
+  remain the escape hatch and outrank it). Committed structural config (no secrets/data): `config/mappings.yaml` (channel
   aliases + per-source column maps), `config/metrics.yaml` (the metric taxonomy),
   `config/campaign_goals.yaml` (goal tagging + goal→tier map), and `config/planner_rails.yaml`
   (planner hard constraints: allowed platforms, audience library, budget/cap rules, naming vocab).
@@ -230,8 +250,9 @@ and (unless `--no-names`) runs the generator to `outputs/trafficking_sheet.xlsx`
 
 ## Status
 
-Phase 1 (thin slice), the **Phase 2 data layer**, the full **goal-aware reporting layer**, and the
-**campaign planner layer** are complete and passing (`pytest -q`), all on synthetic data. The
+Phase 1 (thin slice), the **Phase 2 data layer**, the full **goal-aware reporting layer**, the
+**campaign planner layer**, and the **intake/framing layer** (agent proposes, human confirms;
+client-report gate) are complete and passing (`pytest -q`), all on synthetic data. The
 pipeline runs end-to-end through the durable daily store, emits the national + geo×weekly modeling
 tables and a data-quality report, fits the baseline MMM (synthetic run ≈ R² 0.85 / holdout ≈ 0.76),
 and the dashboard renders the KPI pyramid + goal lens + free-text report lens. The planner turns
